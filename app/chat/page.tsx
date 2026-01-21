@@ -21,19 +21,14 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Voice call state
+  // Voice state - simplified
   const [isCallActive, setIsCallActive] = useState(false)
-  const [isListening, setIsListening] = useState(false)
-  const [isSpeaking, setIsSpeaking] = useState(false)
-  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [callStatus, setCallStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle')
 
-  // Voice refs
   const recognitionRef = useRef<any>(null)
   const synthRef = useRef<SpeechSynthesis | null>(null)
-  const shouldContinueListeningRef = useRef(false)
-  const isProcessingRef = useRef(false)
+  const shouldContinueRef = useRef(false)
 
-  // Initialize speech synthesis
   useEffect(() => {
     if (typeof window !== 'undefined') {
       synthRef.current = window.speechSynthesis
@@ -49,126 +44,78 @@ export default function ChatPage() {
   }, [messages])
 
   // Initialize speech recognition
-  const initializeSpeechRecognition = () => {
-    if (typeof window === 'undefined') return null
-
+  const setupRecognition = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-
-    if (!SpeechRecognition) {
-      setVoiceError('Speech recognition is not supported in your browser. Please use Chrome, Safari, or Edge.')
-      return null
-    }
+    if (!SpeechRecognition) return null
 
     const recognition = new SpeechRecognition()
     recognition.continuous = false
     recognition.interimResults = false
     recognition.lang = 'en-US'
 
-    recognition.onstart = () => {
-      setIsListening(true)
-      setVoiceError(null)
-    }
+    recognition.onstart = () => setCallStatus('listening')
 
     recognition.onresult = async (event: any) => {
       const transcript = event.results[0][0].transcript
-      setIsListening(false)
-
-      // Only process if we're in an active call and not already processing
-      if (shouldContinueListeningRef.current && !isProcessingRef.current) {
-        isProcessingRef.current = true
-        await handleVoiceInput(transcript)
+      if (transcript && shouldContinueRef.current) {
+        await handleVoiceMessage(transcript)
       }
     }
 
     recognition.onerror = (event: any) => {
-      console.error('Speech recognition error:', event.error)
-      setIsListening(false)
-
+      console.error('Speech error:', event.error)
       if (event.error === 'not-allowed') {
-        setVoiceError('Microphone access denied. Please allow microphone access and try again.')
         endCall()
+        alert('Microphone access denied. Please allow microphone access.')
       } else if (event.error === 'no-speech') {
-        // No speech detected, restart listening if call is still active
-        if (shouldContinueListeningRef.current && !isProcessingRef.current) {
+        // Restart listening if still in call
+        if (shouldContinueRef.current) {
           setTimeout(() => startListening(), 500)
-        }
-      } else {
-        // For other errors, try to restart listening
-        if (shouldContinueListeningRef.current && !isProcessingRef.current) {
-          setTimeout(() => startListening(), 1000)
         }
       }
     }
 
     recognition.onend = () => {
-      setIsListening(false)
-      // Don't auto-restart here - we handle it after Scout finishes speaking
+      if (callStatus === 'listening') {
+        setCallStatus('idle')
+      }
     }
 
     return recognition
   }
 
-  // Start listening
   const startListening = () => {
-    if (!recognitionRef.current || isProcessingRef.current) return
+    if (!recognitionRef.current || !shouldContinueRef.current) return
 
     try {
+      setCallStatus('listening')
       recognitionRef.current.start()
-    } catch (error) {
-      console.error('Error starting recognition:', error)
-      // If already started, stop and restart
-      try {
-        recognitionRef.current.stop()
-        setTimeout(() => {
-          if (shouldContinueListeningRef.current && recognitionRef.current) {
-            recognitionRef.current.start()
-          }
-        }, 500)
-      } catch (e) {
-        console.error('Error restarting recognition:', e)
+    } catch (error: any) {
+      if (error.name === 'InvalidStateError') {
+        // Already listening, ignore
+      } else {
+        console.error('Start error:', error)
       }
     }
   }
 
-  // Stop listening
-  const stopListening = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop()
-      } catch (error) {
-        console.error('Error stopping recognition:', error)
-      }
-    }
-    setIsListening(false)
-  }
-
-  // Speak text with voice
-  const speakText = (text: string): Promise<void> => {
+  const speak = async (text: string): Promise<void> => {
     return new Promise((resolve) => {
       if (!synthRef.current) {
         resolve()
         return
       }
 
-      // Cancel any ongoing speech
       synthRef.current.cancel()
-
       const utterance = new SpeechSynthesisUtterance(text)
-      utterance.rate = 1.0
-      utterance.pitch = 1.0
-      utterance.volume = 1.0
 
-      utterance.onstart = () => {
-        setIsSpeaking(true)
-      }
-
+      utterance.onstart = () => setCallStatus('speaking')
       utterance.onend = () => {
-        setIsSpeaking(false)
+        setCallStatus('idle')
         resolve()
       }
-
       utterance.onerror = () => {
-        setIsSpeaking(false)
+        setCallStatus('idle')
         resolve()
       }
 
@@ -176,338 +123,238 @@ export default function ChatPage() {
     })
   }
 
-  // Handle voice input
-  const handleVoiceInput = async (transcript: string) => {
-    if (!transcript.trim()) {
-      isProcessingRef.current = false
-      return
-    }
+  const handleVoiceMessage = async (text: string) => {
+    if (!text.trim()) return
 
-    // Add user message
-    const userMessage: Message = { role: 'user', content: transcript }
-    const updatedMessages = [...messages, userMessage]
-    setMessages(updatedMessages)
-    setIsLoading(true)
+    setCallStatus('thinking')
+    const userMsg: Message = { role: 'user', content: text }
+    const updated = [...messages, userMsg]
+    setMessages(updated)
 
     try {
-      // Call Claude API
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: updatedMessages.map(msg => ({
-            role: msg.role,
-            content: msg.content
-          }))
+          messages: updated.map(m => ({ role: m.role, content: m.content }))
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
-      }
+      if (!response.ok) throw new Error('API request failed')
 
-      // Read the streaming response
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
-      let assistantMessage = ''
+      let aiResponse = ''
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-
-          const chunk = decoder.decode(value, { stream: true })
-          assistantMessage += chunk
-
-          // Update the message in real-time
-          setMessages([...updatedMessages, { role: 'assistant', content: assistantMessage }])
+          aiResponse += decoder.decode(value, { stream: true })
+          setMessages([...updated, { role: 'assistant', content: aiResponse }])
         }
       }
 
-      setIsLoading(false)
+      // Speak the response
+      if (aiResponse && shouldContinueRef.current) {
+        await speak(aiResponse)
 
-      // Speak Scout's response
-      if (assistantMessage && shouldContinueListeningRef.current) {
-        await speakText(assistantMessage)
-
-        // After speaking, restart listening if call is still active
-        isProcessingRef.current = false
-        if (shouldContinueListeningRef.current) {
+        // Restart listening after speaking
+        if (shouldContinueRef.current) {
           setTimeout(() => startListening(), 500)
         }
-      } else {
-        isProcessingRef.current = false
       }
-
-    } catch (error: any) {
+    } catch (error) {
       console.error('Chat error:', error)
+      const errorMsg = "Sorry, I had trouble connecting. Let's try again."
+      setMessages([...updated, { role: 'assistant', content: errorMsg }])
 
-      const errorMessage = error.message.includes('API key')
-        ? "⚠️ API key not configured. Please add your ANTHROPIC_API_KEY to the .env.local file and restart the server."
-        : error.message.includes('Rate limit')
-        ? "⚠️ Rate limit exceeded. Please wait a moment and try again."
-        : `⚠️ Error: ${error.message || 'Failed to get response from Scout. Please try again.'}`;
-
-      setMessages([...updatedMessages, {
-        role: 'assistant',
-        content: errorMessage
-      }])
-      setIsLoading(false)
-      isProcessingRef.current = false
-
-      // Continue listening even after error
-      if (shouldContinueListeningRef.current) {
+      if (shouldContinueRef.current) {
         setTimeout(() => startListening(), 1000)
       }
     }
   }
 
-  // Start voice call
   const startCall = async () => {
-    // Request microphone permission
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(track => track.stop()) // Stop immediately, we just needed permission
+      // Request mic permission
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => stream.getTracks().forEach(track => track.stop()))
 
-      // Initialize speech recognition
-      recognitionRef.current = initializeSpeechRecognition()
-
+      recognitionRef.current = setupRecognition()
       if (!recognitionRef.current) {
-        return // Error message already set
+        alert('Voice not supported in your browser. Please use Chrome, Safari, or Edge.')
+        return
       }
 
-      // Activate call
       setIsCallActive(true)
-      shouldContinueListeningRef.current = true
-      isProcessingRef.current = false
-      setVoiceError(null)
-
-      // Start listening
+      shouldContinueRef.current = true
       setTimeout(() => startListening(), 500)
-
-    } catch (error: any) {
-      console.error('Microphone permission error:', error)
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        setVoiceError('Microphone access denied. Please allow microphone access in your browser settings.')
-      } else {
-        setVoiceError('Could not access microphone. Please check your browser settings.')
-      }
+    } catch (error) {
+      alert('Please allow microphone access to use voice chat.')
     }
   }
 
-  // End voice call
   const endCall = () => {
-    shouldContinueListeningRef.current = false
-    isProcessingRef.current = false
+    shouldContinueRef.current = false
+    setIsCallActive(false)
+    setCallStatus('idle')
 
-    // Stop listening
-    stopListening()
-
-    // Stop speaking
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort() } catch (e) {}
+      recognitionRef.current = null
+    }
     if (synthRef.current) {
       synthRef.current.cancel()
     }
-    setIsSpeaking(false)
-
-    // Cleanup recognition
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort()
-      } catch (e) {
-        console.error('Error aborting recognition:', e)
-      }
-      recognitionRef.current = null
-    }
-
-    setIsCallActive(false)
-    setVoiceError(null)
   }
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      shouldContinueListeningRef.current = false
+      shouldContinueRef.current = false
       if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort()
-        } catch (e) {}
+        try { recognitionRef.current.abort() } catch (e) {}
       }
-      if (synthRef.current) {
-        synthRef.current.cancel()
-      }
+      if (synthRef.current) synthRef.current.cancel()
     }
   }, [])
 
-  // Handle text message send
+  // Handle text messages
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
 
-    const userMessage: Message = { role: 'user', content: input }
-    const updatedMessages = [...messages, userMessage]
-    setMessages(updatedMessages)
+    const userMsg: Message = { role: 'user', content: input }
+    const updated = [...messages, userMsg]
+    setMessages(updated)
     setInput('')
     setIsLoading(true)
 
     try {
-      // Call the API with full conversation history
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: updatedMessages.map(msg => ({
-            role: msg.role,
-            content: msg.content
-          }))
+          messages: updated.map(m => ({ role: m.role, content: m.content }))
         }),
       })
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
+        throw new Error(errorData.error || 'Request failed')
       }
 
-      // Read the streaming response
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
-      let assistantMessage = ''
+      let aiResponse = ''
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-
-          const chunk = decoder.decode(value, { stream: true })
-          assistantMessage += chunk
-
-          // Update the message in real-time
-          setMessages([...updatedMessages, { role: 'assistant', content: assistantMessage }])
+          aiResponse += decoder.decode(value, { stream: true })
+          setMessages([...updated, { role: 'assistant', content: aiResponse }])
         }
       }
 
       setIsLoading(false)
     } catch (error: any) {
       console.error('Chat error:', error)
+      const errorMsg = error.message.includes('API key')
+        ? "⚠️ API key not configured. Please add ANTHROPIC_API_KEY to environment variables."
+        : error.message.includes('credit')
+        ? "⚠️ API credits are low. Please add credits to your Anthropic account."
+        : "⚠️ Something went wrong. Please try again."
 
-      const errorMessage = error.message.includes('API key')
-        ? "⚠️ API key not configured. Please add your ANTHROPIC_API_KEY to the .env.local file and restart the server."
-        : error.message.includes('Rate limit')
-        ? "⚠️ Rate limit exceeded. Please wait a moment and try again."
-        : `⚠️ Error: ${error.message || 'Failed to get response from Scout. Please try again.'}`;
-
-      setMessages([...updatedMessages, {
-        role: 'assistant',
-        content: errorMessage
-      }])
+      setMessages([...updated, { role: 'assistant', content: errorMsg }])
       setIsLoading(false)
-    }
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
     }
   }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col relative">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-4">
+      <header className="bg-white border-b border-gray-200 px-4 py-4 shadow-sm">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900">
+          <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900 transition">
             <ArrowLeft className="h-5 w-5 mr-2" />
-            Back to Home
+            <span className="font-medium">Back to Home</span>
           </Link>
           <div className="flex items-center space-x-2">
             <Sparkles className="h-6 w-6 text-purple-600" />
             <span className="font-semibold text-gray-900">Chat with Scout</span>
           </div>
-          <div className="w-32"></div> {/* Spacer for alignment */}
+          <div className="w-32"></div>
         </div>
       </header>
 
-      {/* Voice Status Banner */}
-      {isCallActive && (isListening || isSpeaking || isLoading) && (
-        <div className="bg-purple-50 border-b border-purple-200 px-4 py-3 animate-fade-in">
+      {/* Voice Status */}
+      {isCallActive && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-200 px-4 py-3">
           <div className="max-w-4xl mx-auto flex items-center justify-center space-x-3">
-            {isListening && !isLoading && (
+            {callStatus === 'listening' && (
               <>
                 <div className="flex space-x-1">
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
+                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse"></div>
+                  <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
                 </div>
-                <span className="text-purple-700 font-medium">🎤 Listening...</span>
+                <span className="text-purple-700 font-semibold">🎤 I'm listening...</span>
               </>
             )}
-            {isLoading && (
+            {callStatus === 'thinking' && (
               <>
                 <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
-                <span className="text-purple-700 font-medium">Scout is thinking...</span>
+                <span className="text-purple-700 font-semibold">Scout is thinking...</span>
               </>
             )}
-            {isSpeaking && (
+            {callStatus === 'speaking' && (
               <>
                 <div className="flex space-x-1">
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
+                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse"></div>
+                  <div className="w-1 h-6 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
                 </div>
-                <span className="text-purple-700 font-medium">🔊 Scout is speaking...</span>
+                <span className="text-green-700 font-semibold">🔊 Scout is speaking...</span>
               </>
             )}
           </div>
         </div>
       )}
 
-      {/* Voice Error Banner */}
-      {voiceError && (
-        <div className="bg-red-50 border-b border-red-200 px-4 py-3">
-          <div className="max-w-4xl mx-auto flex items-center justify-center">
-            <span className="text-red-700 font-medium">⚠️ {voiceError}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Chat Messages */}
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-8 pb-32">
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.map((message, index) => (
             <div
               key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div
                 className={`max-w-[80%] rounded-2xl px-6 py-4 ${
                   message.role === 'user'
-                    ? 'bg-purple-600 text-white'
-                    : 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                    ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                    : 'bg-white text-gray-900 shadow-md border border-gray-100'
                 }`}
               >
                 {message.role === 'assistant' && (
                   <div className="flex items-center space-x-2 mb-2">
-                    <div className="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center">
+                    <div className="w-7 h-7 bg-gradient-to-r from-purple-100 to-blue-100 rounded-full flex items-center justify-center">
                       <Sparkles className="h-4 w-4 text-purple-600" />
                     </div>
-                    <span className="text-sm font-semibold text-purple-600">Scout</span>
+                    <span className="text-sm font-bold text-purple-600">Scout</span>
                   </div>
                 )}
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
               </div>
             </div>
           ))}
 
           {isLoading && !isCallActive && (
-            <div className="flex justify-start">
-              <div className="bg-white rounded-2xl px-6 py-4 shadow-sm border border-gray-200">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="h-4 w-4 text-purple-600 animate-spin" />
-                  <span className="text-gray-600">Scout is thinking...</span>
+            <div className="flex justify-start animate-fade-in">
+              <div className="bg-white rounded-2xl px-6 py-4 shadow-md border border-gray-100">
+                <div className="flex items-center space-x-3">
+                  <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+                  <span className="text-gray-600 font-medium">Scout is thinking...</span>
                 </div>
               </div>
             </div>
@@ -517,63 +364,68 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Input Area - Only show when NOT in call */}
+      {/* Input Area - Hidden during call */}
       {!isCallActive && (
-        <div className="bg-white border-t border-gray-200 px-4 py-4">
+        <div className="bg-white border-t border-gray-200 px-4 py-5 shadow-lg">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-end space-x-4">
-              <div className="flex-1 relative">
+              <div className="flex-1">
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyPress={handleKeyPress}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSend()
+                    }
+                  }}
                   placeholder="Type your answer here..."
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                  className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none text-gray-900 placeholder-gray-400"
                   rows={1}
-                  style={{ minHeight: '52px', maxHeight: '200px' }}
+                  style={{ minHeight: '56px', maxHeight: '200px' }}
                   disabled={isLoading}
                 />
               </div>
               <button
                 onClick={handleSend}
                 disabled={!input.trim() || isLoading}
-                className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 flex-shrink-0"
+                className="px-7 py-4 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-semibold"
               >
                 <span>Send</span>
-                <Send className="h-4 w-4" />
+                <Send className="h-5 w-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-500 mt-2 text-center">
-              💬 Powered by Claude AI. Click the phone icon to start a voice call with Scout.
+            <p className="text-xs text-gray-500 mt-3 text-center">
+              💬 Powered by Claude AI • Click the phone icon to start a voice conversation
             </p>
           </div>
         </div>
       )}
 
-      {/* Floating Phone Button */}
+      {/* Large Floating Phone Button */}
       <div className="fixed bottom-8 right-8 z-50">
         {!isCallActive ? (
           <button
             onClick={startCall}
-            className="w-16 h-16 bg-purple-600 hover:bg-purple-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group"
+            className="group w-20 h-20 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-full shadow-2xl hover:shadow-purple-500/50 transition-all duration-300 flex items-center justify-center transform hover:scale-110"
             title="Start voice call with Scout"
           >
-            <Phone className="h-7 w-7 group-hover:scale-110 transition-transform" />
+            <Phone className="h-9 w-9 group-hover:scale-110 transition-transform" />
           </button>
         ) : (
           <button
             onClick={endCall}
-            className="w-16 h-16 bg-red-600 hover:bg-red-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group animate-pulse"
+            className="group w-20 h-20 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-full shadow-2xl hover:shadow-red-500/50 transition-all duration-300 flex items-center justify-center animate-pulse transform hover:scale-110"
             title="End voice call"
           >
-            <PhoneOff className="h-7 w-7 group-hover:scale-110 transition-transform" />
+            <PhoneOff className="h-9 w-9 group-hover:scale-110 transition-transform" />
           </button>
         )}
       </div>
 
-      {/* Call Active Overlay (optional visual indicator) */}
+      {/* Call Active Badge */}
       {isCallActive && (
-        <div className="fixed bottom-28 right-8 z-40 bg-purple-600 text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium">
+        <div className="fixed bottom-32 right-8 z-40 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-5 py-2 rounded-full shadow-lg text-sm font-bold animate-fade-in">
           📞 Call Active
         </div>
       )}
