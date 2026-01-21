@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Send, ArrowLeft, Loader2, Mic, MicOff, Volume2, VolumeX, StopCircle } from 'lucide-react'
+import { Sparkles, Send, ArrowLeft, Loader2, Phone, PhoneOff } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -21,15 +21,14 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Voice state
-  const [isVoiceMode, setIsVoiceMode] = useState(false)
-  const [isListening, setIsListening] = useState(false)
-  const [isSpeaking, setIsSpeaking] = useState(false)
+  // Voice state - simplified
+  const [isCallActive, setIsCallActive] = useState(false)
+  const [callStatus, setCallStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle')
+
   const recognitionRef = useRef<any>(null)
   const synthRef = useRef<SpeechSynthesis | null>(null)
-  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const shouldContinueRef = useRef(false)
 
-  // Initialize speech synthesis
   useEffect(() => {
     if (typeof window !== 'undefined') {
       synthRef.current = window.speechSynthesis
@@ -45,282 +44,317 @@ export default function ChatPage() {
   }, [messages])
 
   // Initialize speech recognition
-  useEffect(() => {
-    if (typeof window !== 'undefined' && isVoiceMode) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  const setupRecognition = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return null
 
-      if (SpeechRecognition) {
-        recognitionRef.current = new SpeechRecognition()
-        recognitionRef.current.continuous = false
-        recognitionRef.current.interimResults = false
-        recognitionRef.current.lang = 'en-US'
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.lang = 'en-US'
 
-        recognitionRef.current.onresult = (event: any) => {
-          const transcript = event.results[0][0].transcript
-          setInput(transcript)
-          setIsListening(false)
-        }
+    recognition.onstart = () => setCallStatus('listening')
 
-        recognitionRef.current.onerror = (event: any) => {
-          console.error('Speech recognition error:', event.error)
-          setIsListening(false)
-        }
+    recognition.onresult = async (event: any) => {
+      const transcript = event.results[0][0].transcript
+      if (transcript && shouldContinueRef.current) {
+        await handleVoiceMessage(transcript)
+      }
+    }
 
-        recognitionRef.current.onend = () => {
-          setIsListening(false)
+    recognition.onerror = (event: any) => {
+      console.error('Speech error:', event.error)
+      if (event.error === 'not-allowed') {
+        endCall()
+        alert('Microphone access denied. Please allow microphone access.')
+      } else if (event.error === 'no-speech') {
+        // Restart listening if still in call
+        if (shouldContinueRef.current) {
+          setTimeout(() => startListening(), 500)
         }
       }
     }
 
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop()
+    recognition.onend = () => {
+      if (callStatus === 'listening') {
+        setCallStatus('idle')
       }
     }
-  }, [isVoiceMode])
 
-  // Toggle listening
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      alert('Speech recognition is not supported in your browser. Please use Chrome, Safari, or Edge.')
-      return
-    }
-
-    if (isListening) {
-      recognitionRef.current.stop()
-      setIsListening(false)
-    } else {
-      recognitionRef.current.start()
-      setIsListening(true)
-    }
+    return recognition
   }
 
-  // Speak text
-  const speakText = (text: string) => {
-    if (!synthRef.current) return
-
-    // Cancel any ongoing speech
-    synthRef.current.cancel()
-
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 1.0
-    utterance.pitch = 1.0
-    utterance.volume = 1.0
-
-    utterance.onstart = () => {
-      setIsSpeaking(true)
-      currentUtteranceRef.current = utterance
-    }
-
-    utterance.onend = () => {
-      setIsSpeaking(false)
-      currentUtteranceRef.current = null
-    }
-
-    utterance.onerror = () => {
-      setIsSpeaking(false)
-      currentUtteranceRef.current = null
-    }
-
-    synthRef.current.speak(utterance)
-  }
-
-  // Stop speaking
-  const stopSpeaking = () => {
-    if (synthRef.current) {
-      synthRef.current.cancel()
-      setIsSpeaking(false)
-      currentUtteranceRef.current = null
-    }
-  }
-
-  // Send message to Claude API
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return
-
-    const userMessage: Message = { role: 'user', content: input }
-    const updatedMessages = [...messages, userMessage]
-    setMessages(updatedMessages)
-    setInput('')
-    setIsLoading(true)
+  const startListening = () => {
+    if (!recognitionRef.current || !shouldContinueRef.current) return
 
     try {
-      // Call the API with full conversation history
+      setCallStatus('listening')
+      recognitionRef.current.start()
+    } catch (error: any) {
+      if (error.name === 'InvalidStateError') {
+        // Already listening, ignore
+      } else {
+        console.error('Start error:', error)
+      }
+    }
+  }
+
+  const speak = async (text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!synthRef.current) {
+        resolve()
+        return
+      }
+
+      synthRef.current.cancel()
+      const utterance = new SpeechSynthesisUtterance(text)
+
+      utterance.onstart = () => setCallStatus('speaking')
+      utterance.onend = () => {
+        setCallStatus('idle')
+        resolve()
+      }
+      utterance.onerror = () => {
+        setCallStatus('idle')
+        resolve()
+      }
+
+      synthRef.current.speak(utterance)
+    })
+  }
+
+  const handleVoiceMessage = async (text: string) => {
+    if (!text.trim()) return
+
+    setCallStatus('thinking')
+    const userMsg: Message = { role: 'user', content: text }
+    const updated = [...messages, userMsg]
+    setMessages(updated)
+
+    try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: updatedMessages.map(msg => ({
-            role: msg.role,
-            content: msg.content
-          }))
+          messages: updated.map(m => ({ role: m.role, content: m.content }))
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
-      }
+      if (!response.ok) throw new Error('API request failed')
 
-      // Read the streaming response
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
-      let assistantMessage = ''
+      let aiResponse = ''
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-
-          const chunk = decoder.decode(value, { stream: true })
-          assistantMessage += chunk
-
-          // Update the message in real-time
-          setMessages([...updatedMessages, { role: 'assistant', content: assistantMessage }])
+          aiResponse += decoder.decode(value, { stream: true })
+          setMessages([...updated, { role: 'assistant', content: aiResponse }])
         }
       }
 
-      // Auto-speak in voice mode
-      if (isVoiceMode && assistantMessage) {
-        speakText(assistantMessage)
+      // Speak the response
+      if (aiResponse && shouldContinueRef.current) {
+        await speak(aiResponse)
+
+        // Restart listening after speaking
+        if (shouldContinueRef.current) {
+          setTimeout(() => startListening(), 500)
+        }
+      }
+    } catch (error) {
+      console.error('Chat error:', error)
+      const errorMsg = "Sorry, I had trouble connecting. Let's try again."
+      setMessages([...updated, { role: 'assistant', content: errorMsg }])
+
+      if (shouldContinueRef.current) {
+        setTimeout(() => startListening(), 1000)
+      }
+    }
+  }
+
+  const startCall = async () => {
+    try {
+      // Request mic permission
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => stream.getTracks().forEach(track => track.stop()))
+
+      recognitionRef.current = setupRecognition()
+      if (!recognitionRef.current) {
+        alert('Voice not supported in your browser. Please use Chrome, Safari, or Edge.')
+        return
+      }
+
+      setIsCallActive(true)
+      shouldContinueRef.current = true
+      setTimeout(() => startListening(), 500)
+    } catch (error) {
+      alert('Please allow microphone access to use voice chat.')
+    }
+  }
+
+  const endCall = () => {
+    shouldContinueRef.current = false
+    setIsCallActive(false)
+    setCallStatus('idle')
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort() } catch (e) {}
+      recognitionRef.current = null
+    }
+    if (synthRef.current) {
+      synthRef.current.cancel()
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      shouldContinueRef.current = false
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort() } catch (e) {}
+      }
+      if (synthRef.current) synthRef.current.cancel()
+    }
+  }, [])
+
+  // Handle text messages
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return
+
+    const userMsg: Message = { role: 'user', content: input }
+    const updated = [...messages, userMsg]
+    setMessages(updated)
+    setInput('')
+    setIsLoading(true)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: updated.map(m => ({ role: m.role, content: m.content }))
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Request failed')
+      }
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let aiResponse = ''
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          aiResponse += decoder.decode(value, { stream: true })
+          setMessages([...updated, { role: 'assistant', content: aiResponse }])
+        }
       }
 
       setIsLoading(false)
     } catch (error: any) {
       console.error('Chat error:', error)
+      const errorMsg = error.message.includes('API key')
+        ? "⚠️ API key not configured. Please add ANTHROPIC_API_KEY to environment variables."
+        : error.message.includes('credit')
+        ? "⚠️ API credits are low. Please add credits to your Anthropic account."
+        : "⚠️ Something went wrong. Please try again."
 
-      const errorMessage = error.message.includes('API key')
-        ? "⚠️ API key not configured. Please add your ANTHROPIC_API_KEY to the .env.local file and restart the server."
-        : error.message.includes('Rate limit')
-        ? "⚠️ Rate limit exceeded. Please wait a moment and try again."
-        : `⚠️ Error: ${error.message || 'Failed to get response from Scout. Please try again.'}`;
-
-      setMessages([...updatedMessages, {
-        role: 'assistant',
-        content: errorMessage
-      }])
+      setMessages([...updated, { role: 'assistant', content: errorMsg }])
       setIsLoading(false)
     }
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-50 flex flex-col relative">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-4">
+      <header className="bg-white border-b border-gray-200 px-4 py-4 shadow-sm">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900">
+          <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900 transition">
             <ArrowLeft className="h-5 w-5 mr-2" />
-            Back to Home
+            <span className="font-medium">Back to Home</span>
           </Link>
           <div className="flex items-center space-x-2">
             <Sparkles className="h-6 w-6 text-purple-600" />
             <span className="font-semibold text-gray-900">Chat with Scout</span>
           </div>
-          {/* Voice Mode Toggle */}
-          <button
-            onClick={() => {
-              setIsVoiceMode(!isVoiceMode)
-              if (isVoiceMode) {
-                stopSpeaking()
-                if (recognitionRef.current) {
-                  recognitionRef.current.stop()
-                }
-              }
-            }}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition ${
-              isVoiceMode
-                ? 'bg-purple-600 text-white hover:bg-purple-700'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            {isVoiceMode ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-            <span className="text-sm font-medium">Voice {isVoiceMode ? 'On' : 'Off'}</span>
-          </button>
+          <div className="w-32"></div>
         </div>
       </header>
 
-      {/* Voice Status Banner */}
-      {isVoiceMode && (isListening || isSpeaking) && (
-        <div className="bg-purple-50 border-b border-purple-200 px-4 py-3">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              {isListening && (
-                <>
-                  <div className="flex space-x-1">
-                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
-                  </div>
-                  <span className="text-purple-700 font-medium">🎤 Listening...</span>
-                </>
-              )}
-              {isSpeaking && (
-                <>
-                  <div className="flex space-x-1">
-                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
-                  </div>
-                  <span className="text-purple-700 font-medium">🔊 Scout is speaking...</span>
-                </>
-              )}
-            </div>
-            {isSpeaking && (
-              <button
-                onClick={stopSpeaking}
-                className="flex items-center space-x-2 px-3 py-1 bg-white rounded-lg hover:bg-gray-50 transition"
-              >
-                <StopCircle className="h-4 w-4 text-purple-600" />
-                <span className="text-sm text-purple-600 font-medium">Stop</span>
-              </button>
+      {/* Voice Status */}
+      {isCallActive && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-200 px-4 py-3">
+          <div className="max-w-4xl mx-auto flex items-center justify-center space-x-3">
+            {callStatus === 'listening' && (
+              <>
+                <div className="flex space-x-1">
+                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse"></div>
+                  <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
+                </div>
+                <span className="text-purple-700 font-semibold">🎤 I'm listening...</span>
+              </>
+            )}
+            {callStatus === 'thinking' && (
+              <>
+                <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+                <span className="text-purple-700 font-semibold">Scout is thinking...</span>
+              </>
+            )}
+            {callStatus === 'speaking' && (
+              <>
+                <div className="flex space-x-1">
+                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse"></div>
+                  <div className="w-1 h-6 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
+                </div>
+                <span className="text-green-700 font-semibold">🔊 Scout is speaking...</span>
+              </>
             )}
           </div>
         </div>
       )}
 
-      {/* Chat Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-8">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-8 pb-32">
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.map((message, index) => (
             <div
               key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div
                 className={`max-w-[80%] rounded-2xl px-6 py-4 ${
                   message.role === 'user'
-                    ? 'bg-purple-600 text-white'
-                    : 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                    ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                    : 'bg-white text-gray-900 shadow-md border border-gray-100'
                 }`}
               >
                 {message.role === 'assistant' && (
                   <div className="flex items-center space-x-2 mb-2">
-                    <div className="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center">
+                    <div className="w-7 h-7 bg-gradient-to-r from-purple-100 to-blue-100 rounded-full flex items-center justify-center">
                       <Sparkles className="h-4 w-4 text-purple-600" />
                     </div>
-                    <span className="text-sm font-semibold text-purple-600">Scout</span>
+                    <span className="text-sm font-bold text-purple-600">Scout</span>
                   </div>
                 )}
-                <p className="whitespace-pre-wrap">{message.content}</p>
+                <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
               </div>
             </div>
           ))}
 
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="bg-white rounded-2xl px-6 py-4 shadow-sm border border-gray-200">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="h-4 w-4 text-purple-600 animate-spin" />
-                  <span className="text-gray-600">Scout is thinking...</span>
+          {isLoading && !isCallActive && (
+            <div className="flex justify-start animate-fade-in">
+              <div className="bg-white rounded-2xl px-6 py-4 shadow-md border border-gray-100">
+                <div className="flex items-center space-x-3">
+                  <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+                  <span className="text-gray-600 font-medium">Scout is thinking...</span>
                 </div>
               </div>
             </div>
@@ -330,53 +364,71 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Input Area */}
-      <div className="bg-white border-t border-gray-200 px-4 py-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-end space-x-4">
-            {/* Voice Input Button */}
-            {isVoiceMode && (
+      {/* Input Area - Hidden during call */}
+      {!isCallActive && (
+        <div className="bg-white border-t border-gray-200 px-4 py-5 shadow-lg">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-end space-x-4">
+              <div className="flex-1">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                  placeholder="Type your answer here..."
+                  className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none text-gray-900 placeholder-gray-400"
+                  rows={1}
+                  style={{ minHeight: '56px', maxHeight: '200px' }}
+                  disabled={isLoading}
+                />
+              </div>
               <button
-                onClick={toggleListening}
-                disabled={isLoading || isSpeaking}
-                className={`p-3 rounded-xl transition flex-shrink-0 ${
-                  isListening
-                    ? 'bg-red-600 text-white hover:bg-red-700'
-                    : 'bg-purple-600 text-white hover:bg-purple-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                onClick={handleSend}
+                disabled={!input.trim() || isLoading}
+                className="px-7 py-4 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-semibold"
               >
-                {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                <span>Send</span>
+                <Send className="h-5 w-5" />
               </button>
-            )}
-
-            <div className="flex-1 relative">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder={isVoiceMode ? "Click the mic or type your answer..." : "Type your answer here..."}
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
-                rows={1}
-                style={{ minHeight: '52px', maxHeight: '200px' }}
-                disabled={isLoading}
-              />
             </div>
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isLoading}
-              className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 flex-shrink-0"
-            >
-              <span>Send</span>
-              <Send className="h-4 w-4" />
-            </button>
+            <p className="text-xs text-gray-500 mt-3 text-center">
+              💬 Powered by Claude AI • Click the phone icon to start a voice conversation
+            </p>
           </div>
-          <p className="text-xs text-gray-500 mt-2 text-center">
-            {isVoiceMode
-              ? '🎤 Voice mode active. Click the mic to speak or type your response.'
-              : '💬 Powered by Claude AI. Scout remembers your conversation context.'}
-          </p>
         </div>
+      )}
+
+      {/* Large Floating Phone Button */}
+      <div className="fixed bottom-8 right-8 z-50">
+        {!isCallActive ? (
+          <button
+            onClick={startCall}
+            className="group w-20 h-20 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-full shadow-2xl hover:shadow-purple-500/50 transition-all duration-300 flex items-center justify-center transform hover:scale-110"
+            title="Start voice call with Scout"
+          >
+            <Phone className="h-9 w-9 group-hover:scale-110 transition-transform" />
+          </button>
+        ) : (
+          <button
+            onClick={endCall}
+            className="group w-20 h-20 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-full shadow-2xl hover:shadow-red-500/50 transition-all duration-300 flex items-center justify-center animate-pulse transform hover:scale-110"
+            title="End voice call"
+          >
+            <PhoneOff className="h-9 w-9 group-hover:scale-110 transition-transform" />
+          </button>
+        )}
       </div>
+
+      {/* Call Active Badge */}
+      {isCallActive && (
+        <div className="fixed bottom-32 right-8 z-40 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-5 py-2 rounded-full shadow-lg text-sm font-bold animate-fade-in">
+          📞 Call Active
+        </div>
+      )}
     </div>
   )
 }
