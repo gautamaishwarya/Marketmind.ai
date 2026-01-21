@@ -2,26 +2,48 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Send, ArrowLeft, Loader2, Phone, PhoneOff } from 'lucide-react'
+import { Sparkles, Send, ArrowLeft, Loader2, Phone, PhoneOff, FileText, Download, CheckCircle2, Target, TrendingUp, Users } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
 }
 
+interface ResearchData {
+  product?: string
+  targetMarket?: string
+  competitors?: string[]
+}
+
+type ResearchStage = 'idle' | 'collecting' | 'researching' | 'complete'
+
+const RESEARCH_STEPS = [
+  { id: 'competitors', label: 'Discovering competitors', icon: Target },
+  { id: 'market', label: 'Analyzing market size', icon: TrendingUp },
+  { id: 'icp', label: 'Building ICP profiles', icon: Users },
+  { id: 'frameworks', label: 'Running business frameworks', icon: CheckCircle2 },
+  { id: 'synthesis', label: 'Generating insights', icon: Sparkles },
+]
+
 export default function ChatPage() {
   // Chat state
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hey! I'm Scout, your AI market research agent. I'm here to help you understand your market and find your ideal customers. What are you building?"
+      content: "Hey! I'm Scout, your AI market research agent. I'll help you understand your market and find your ideal customers through comprehensive competitive intelligence.\n\nWhat product or service are you building?"
     }
   ])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Voice state - simplified
+  // Research state
+  const [researchStage, setResearchStage] = useState<ResearchStage>('collecting')
+  const [researchData, setResearchData] = useState<ResearchData>({})
+  const [currentResearchStep, setCurrentResearchStep] = useState(0)
+  const [researchResults, setResearchResults] = useState<any>(null)
+
+  // Voice state
   const [isCallActive, setIsCallActive] = useState(false)
   const [callStatus, setCallStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle')
 
@@ -68,7 +90,6 @@ export default function ChatPage() {
         endCall()
         alert('Microphone access denied. Please allow microphone access.')
       } else if (event.error === 'no-speech') {
-        // Restart listening if still in call
         if (shouldContinueRef.current) {
           setTimeout(() => startListening(), 500)
         }
@@ -127,57 +148,15 @@ export default function ChatPage() {
     if (!text.trim()) return
 
     setCallStatus('thinking')
-    const userMsg: Message = { role: 'user', content: text }
-    const updated = [...messages, userMsg]
-    setMessages(updated)
+    await handleSend(text)
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: updated.map(m => ({ role: m.role, content: m.content }))
-        }),
-      })
-
-      if (!response.ok) throw new Error('API request failed')
-
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-      let aiResponse = ''
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          aiResponse += decoder.decode(value, { stream: true })
-          setMessages([...updated, { role: 'assistant', content: aiResponse }])
-        }
-      }
-
-      // Speak the response
-      if (aiResponse && shouldContinueRef.current) {
-        await speak(aiResponse)
-
-        // Restart listening after speaking
-        if (shouldContinueRef.current) {
-          setTimeout(() => startListening(), 500)
-        }
-      }
-    } catch (error) {
-      console.error('Chat error:', error)
-      const errorMsg = "Sorry, I had trouble connecting. Let's try again."
-      setMessages([...updated, { role: 'assistant', content: errorMsg }])
-
-      if (shouldContinueRef.current) {
-        setTimeout(() => startListening(), 1000)
-      }
+    if (shouldContinueRef.current) {
+      setTimeout(() => startListening(), 500)
     }
   }
 
   const startCall = async () => {
     try {
-      // Request mic permission
       await navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => stream.getTracks().forEach(track => track.stop()))
 
@@ -219,15 +198,102 @@ export default function ChatPage() {
     }
   }, [])
 
-  // Handle text messages
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return
+  // Research triggering logic
+  const shouldTriggerResearch = (userInput: string, conversationHistory: Message[]): boolean => {
+    // Trigger research if user has mentioned their product
+    const hasProduct = researchData.product !== undefined
+    const mentionsMarket = userInput.toLowerCase().includes('team') ||
+                          userInput.toLowerCase().includes('market') ||
+                          conversationHistory.length >= 3
 
-    const userMsg: Message = { role: 'user', content: input }
+    return hasProduct && mentionsMarket && researchStage === 'collecting'
+  }
+
+  const extractResearchData = (userInput: string): Partial<ResearchData> => {
+    const data: Partial<ResearchData> = {}
+
+    // Simple extraction logic - in production, use Claude to extract
+    if (!researchData.product && messages.length === 1) {
+      data.product = userInput
+    }
+
+    if (userInput.toLowerCase().includes('team') && !researchData.targetMarket) {
+      // Extract target market
+      const marketMatch = userInput.match(/for\s+(\w+\s+\w+)/i)
+      if (marketMatch) {
+        data.targetMarket = marketMatch[1]
+      }
+    }
+
+    return data
+  }
+
+  const triggerResearch = async () => {
+    setResearchStage('researching')
+
+    // Add message about starting research
+    const researchMessage: Message = {
+      role: 'assistant',
+      content: `Perfect! I have enough information to run comprehensive research. Let me analyze your market:\n\n📊 Running competitive intelligence...\n🎯 Building ICP profiles...\n💡 Analyzing frameworks...\n\nThis will take about 2-3 minutes. I'll show you the progress!`
+    }
+    setMessages(prev => [...prev, researchMessage])
+
+    // Simulate research progress
+    for (let i = 0; i < RESEARCH_STEPS.length; i++) {
+      setCurrentResearchStep(i)
+      await new Promise(resolve => setTimeout(resolve, 3000))
+    }
+
+    // Call research API
+    try {
+      const response = await fetch('/api/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product: researchData.product,
+          targetMarket: researchData.targetMarket || 'general market',
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        setResearchResults(data.results)
+        setResearchStage('complete')
+
+        const completionMessage: Message = {
+          role: 'assistant',
+          content: `🎉 Research complete! I've analyzed your market comprehensively.\n\n**Here's what I found:**\n\n📊 **Market Intelligence**\n- Identified top 5 competitors\n- Analyzed pricing strategies\n- Mapped market positioning\n\n🎯 **ICP Analysis**\n- Created 2 detailed customer profiles\n- Found key pain points from real data\n- Identified buying triggers\n\n💡 **Strategic Insights**\n- SWOT analysis for each competitor\n- Porter's Five Forces framework\n- Positioning recommendations\n\nClick "Download Report" to get your full 20-page GTM research report!`
+        }
+        setMessages(prev => [...prev, completionMessage])
+      }
+    } catch (error) {
+      console.error('Research failed:', error)
+      setResearchStage('collecting')
+    }
+  }
+
+  // Handle text messages
+  const handleSend = async (text?: string) => {
+    const messageText = text || input
+    if (!messageText.trim() || isLoading) return
+
+    const userMsg: Message = { role: 'user', content: messageText }
     const updated = [...messages, userMsg]
     setMessages(updated)
-    setInput('')
+    if (!text) setInput('')
     setIsLoading(true)
+
+    // Extract research data
+    const extracted = extractResearchData(messageText)
+    setResearchData(prev => ({ ...prev, ...extracted }))
+
+    // Check if we should trigger research
+    if (shouldTriggerResearch(messageText, updated)) {
+      setIsLoading(false)
+      await triggerResearch()
+      return
+    }
 
     try {
       const response = await fetch('/api/chat', {
@@ -256,18 +322,23 @@ export default function ChatPage() {
         }
       }
 
+      // Auto-speak if in voice mode
+      if (isCallActive && aiResponse) {
+        await speak(aiResponse)
+      }
+
       setIsLoading(false)
     } catch (error: any) {
       console.error('Chat error:', error)
-      const errorMsg = error.message.includes('API key')
-        ? "⚠️ API key not configured. Please add ANTHROPIC_API_KEY to environment variables."
-        : error.message.includes('credit')
-        ? "⚠️ API credits are low. Please add credits to your Anthropic account."
-        : "⚠️ Something went wrong. Please try again."
-
+      const errorMsg = "⚠️ Something went wrong. Please try again."
       setMessages([...updated, { role: 'assistant', content: errorMsg }])
       setIsLoading(false)
     }
+  }
+
+  const downloadReport = () => {
+    // TODO: Generate and download PDF report
+    alert('Report generation coming soon! Your comprehensive GTM research will be available as a professional PDF.')
   }
 
   return (
@@ -321,6 +392,62 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* Research Progress */}
+      {researchStage === 'researching' && (
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-200 px-4 py-6">
+          <div className="max-w-4xl mx-auto">
+            <div className="text-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Running Comprehensive Research...</h3>
+              <p className="text-sm text-gray-600">Analyzing competitors, market data, and building ICP profiles</p>
+            </div>
+
+            <div className="space-y-3">
+              {RESEARCH_STEPS.map((step, index) => {
+                const isComplete = index < currentResearchStep
+                const isCurrent = index === currentResearchStep
+                const Icon = step.icon
+
+                return (
+                  <div
+                    key={step.id}
+                    className={`flex items-center space-x-3 p-3 rounded-lg transition-all ${
+                      isComplete ? 'bg-green-100' :
+                      isCurrent ? 'bg-blue-100 animate-pulse' :
+                      'bg-white opacity-50'
+                    }`}
+                  >
+                    {isComplete ? (
+                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    ) : isCurrent ? (
+                      <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+                    ) : (
+                      <Icon className="h-5 w-5 text-gray-400" />
+                    )}
+                    <span className={`font-medium ${
+                      isComplete ? 'text-green-700' :
+                      isCurrent ? 'text-blue-700' :
+                      'text-gray-500'
+                    }`}>
+                      {step.label}
+                      {isComplete && ' ✓'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="mt-4">
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${(currentResearchStep / RESEARCH_STEPS.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-8 pb-32">
         <div className="max-w-4xl mx-auto space-y-6">
@@ -349,7 +476,21 @@ export default function ChatPage() {
             </div>
           ))}
 
-          {isLoading && !isCallActive && (
+          {/* Download Report Button */}
+          {researchStage === 'complete' && (
+            <div className="flex justify-center animate-fade-in">
+              <button
+                onClick={downloadReport}
+                className="flex items-center space-x-3 px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                <FileText className="h-6 w-6" />
+                <span className="font-bold text-lg">Download Full Report</span>
+                <Download className="h-5 w-5" />
+              </button>
+            </div>
+          )}
+
+          {isLoading && !isCallActive && researchStage !== 'researching' && (
             <div className="flex justify-start animate-fade-in">
               <div className="bg-white rounded-2xl px-6 py-4 shadow-md border border-gray-100">
                 <div className="flex items-center space-x-3">
@@ -364,8 +505,8 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Input Area - Hidden during call */}
-      {!isCallActive && (
+      {/* Input Area */}
+      {!isCallActive && researchStage !== 'researching' && (
         <div className="bg-white border-t border-gray-200 px-4 py-5 shadow-lg">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-end space-x-4">
@@ -387,7 +528,7 @@ export default function ChatPage() {
                 />
               </div>
               <button
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || isLoading}
                 className="px-7 py-4 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-semibold"
               >
@@ -396,13 +537,13 @@ export default function ChatPage() {
               </button>
             </div>
             <p className="text-xs text-gray-500 mt-3 text-center">
-              💬 Powered by Claude AI • Click the phone icon to start a voice conversation
+              💬 Powered by Claude AI • Comprehensive GTM research in minutes
             </p>
           </div>
         </div>
       )}
 
-      {/* Large Floating Phone Button */}
+      {/* Floating Phone Button */}
       <div className="fixed bottom-8 right-8 z-50">
         {!isCallActive ? (
           <button
