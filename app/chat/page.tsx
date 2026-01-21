@@ -2,29 +2,39 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Send, ArrowLeft, Loader2 } from 'lucide-react'
+import { Sparkles, Send, ArrowLeft, Loader2, Mic, MicOff, Volume2, VolumeX, StopCircle } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
 }
 
-const DISCOVERY_QUESTIONS = [
-  "Hey! I'm Scout, your AI market research agent. I'm here to help you understand your market and find your ideal customers. What are you building?",
-  "Great! Tell me more about the problem you're solving. Who currently struggles with this problem the most?",
-  "Interesting! What's your target market? Are you focused on B2B, B2C, or both?",
-  "Got it. Do you have any idea who your main competitors are? Or what alternatives people currently use?",
-  "Perfect! Based on what you've shared, I can help you with:\n\n1. Detailed ICP personas with pain points\n2. Competitive analysis\n3. Market size estimation\n4. Go-to-market channel recommendations\n\nWhat would you like to dive into first?"
-]
-
 export default function ChatPage() {
+  // Chat state
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: DISCOVERY_QUESTIONS[0] }
+    {
+      role: 'assistant',
+      content: "Hey! I'm Scout, your AI market research agent. I'm here to help you understand your market and find your ideal customers. What are you building?"
+    }
   ])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [questionIndex, setQuestionIndex] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Voice state
+  const [isVoiceMode, setIsVoiceMode] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const recognitionRef = useRef<any>(null)
+  const synthRef = useRef<SpeechSynthesis | null>(null)
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  // Initialize speech synthesis
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      synthRef.current = window.speechSynthesis
+    }
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -34,34 +44,165 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages])
 
+  // Initialize speech recognition
+  useEffect(() => {
+    if (typeof window !== 'undefined' && isVoiceMode) {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition()
+        recognitionRef.current.continuous = false
+        recognitionRef.current.interimResults = false
+        recognitionRef.current.lang = 'en-US'
+
+        recognitionRef.current.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript
+          setInput(transcript)
+          setIsListening(false)
+        }
+
+        recognitionRef.current.onerror = (event: any) => {
+          console.error('Speech recognition error:', event.error)
+          setIsListening(false)
+        }
+
+        recognitionRef.current.onend = () => {
+          setIsListening(false)
+        }
+      }
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop()
+      }
+    }
+  }, [isVoiceMode])
+
+  // Toggle listening
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome, Safari, or Edge.')
+      return
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop()
+      setIsListening(false)
+    } else {
+      recognitionRef.current.start()
+      setIsListening(true)
+    }
+  }
+
+  // Speak text
+  const speakText = (text: string) => {
+    if (!synthRef.current) return
+
+    // Cancel any ongoing speech
+    synthRef.current.cancel()
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+    utterance.volume = 1.0
+
+    utterance.onstart = () => {
+      setIsSpeaking(true)
+      currentUtteranceRef.current = utterance
+    }
+
+    utterance.onend = () => {
+      setIsSpeaking(false)
+      currentUtteranceRef.current = null
+    }
+
+    utterance.onerror = () => {
+      setIsSpeaking(false)
+      currentUtteranceRef.current = null
+    }
+
+    synthRef.current.speak(utterance)
+  }
+
+  // Stop speaking
+  const stopSpeaking = () => {
+    if (synthRef.current) {
+      synthRef.current.cancel()
+      setIsSpeaking(false)
+      currentUtteranceRef.current = null
+    }
+  }
+
+  // Send message to Claude API
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
 
     const userMessage: Message = { role: 'user', content: input }
-    setMessages(prev => [...prev, userMessage])
+    const updatedMessages = [...messages, userMessage]
+    setMessages(updatedMessages)
     setInput('')
     setIsLoading(true)
 
-    // Simulate Scout's response
-    setTimeout(() => {
-      const nextIndex = questionIndex + 1
-      if (nextIndex < DISCOVERY_QUESTIONS.length) {
-        const scoutResponse: Message = {
-          role: 'assistant',
-          content: DISCOVERY_QUESTIONS[nextIndex]
-        }
-        setMessages(prev => [...prev, scoutResponse])
-        setQuestionIndex(nextIndex)
-      } else {
-        // Final response with insights
-        const finalResponse: Message = {
-          role: 'assistant',
-          content: `Thanks for sharing all that! Based on our conversation, here's a quick summary:\n\n📊 **What I learned:**\n- Your product targets a specific pain point\n- You have a clear value proposition\n- There's competition but also opportunity\n\n💡 **Next Steps:**\n\nTo give you a complete market research report with detailed ICP personas, competitive analysis, and market sizing, I'll need to do a deep dive. This typically includes:\n\n1. Analyzing 50+ competitors\n2. Generating 3-5 detailed personas\n3. Calculating TAM/SAM/SOM\n4. Identifying best distribution channels\n\n**Note:** This demo shows Scout's conversational approach. In the full version, Scout uses real AI (Claude API) to generate comprehensive market research based on your specific business.\n\nWant to upgrade to get your full research report? 🚀`
-        }
-        setMessages(prev => [...prev, finalResponse])
+    try {
+      // Call the API with full conversation history
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: updatedMessages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          }))
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
       }
+
+      // Read the streaming response
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let assistantMessage = ''
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          assistantMessage += chunk
+
+          // Update the message in real-time
+          setMessages([...updatedMessages, { role: 'assistant', content: assistantMessage }])
+        }
+      }
+
+      // Auto-speak in voice mode
+      if (isVoiceMode && assistantMessage) {
+        speakText(assistantMessage)
+      }
+
       setIsLoading(false)
-    }, 1000 + Math.random() * 1000)
+    } catch (error: any) {
+      console.error('Chat error:', error)
+
+      const errorMessage = error.message.includes('API key')
+        ? "⚠️ API key not configured. Please add your ANTHROPIC_API_KEY to the .env.local file and restart the server."
+        : error.message.includes('Rate limit')
+        ? "⚠️ Rate limit exceeded. Please wait a moment and try again."
+        : `⚠️ Error: ${error.message || 'Failed to get response from Scout. Please try again.'}`;
+
+      setMessages([...updatedMessages, {
+        role: 'assistant',
+        content: errorMessage
+      }])
+      setIsLoading(false)
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -84,9 +225,67 @@ export default function ChatPage() {
             <Sparkles className="h-6 w-6 text-purple-600" />
             <span className="font-semibold text-gray-900">Chat with Scout</span>
           </div>
-          <div className="w-24"></div> {/* Spacer for alignment */}
+          {/* Voice Mode Toggle */}
+          <button
+            onClick={() => {
+              setIsVoiceMode(!isVoiceMode)
+              if (isVoiceMode) {
+                stopSpeaking()
+                if (recognitionRef.current) {
+                  recognitionRef.current.stop()
+                }
+              }
+            }}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition ${
+              isVoiceMode
+                ? 'bg-purple-600 text-white hover:bg-purple-700'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            {isVoiceMode ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            <span className="text-sm font-medium">Voice {isVoiceMode ? 'On' : 'Off'}</span>
+          </button>
         </div>
       </header>
+
+      {/* Voice Status Banner */}
+      {isVoiceMode && (isListening || isSpeaking) && (
+        <div className="bg-purple-50 border-b border-purple-200 px-4 py-3">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              {isListening && (
+                <>
+                  <div className="flex space-x-1">
+                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                  <span className="text-purple-700 font-medium">🎤 Listening...</span>
+                </>
+              )}
+              {isSpeaking && (
+                <>
+                  <div className="flex space-x-1">
+                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                  <span className="text-purple-700 font-medium">🔊 Scout is speaking...</span>
+                </>
+              )}
+            </div>
+            {isSpeaking && (
+              <button
+                onClick={stopSpeaking}
+                className="flex items-center space-x-2 px-3 py-1 bg-white rounded-lg hover:bg-gray-50 transition"
+              >
+                <StopCircle className="h-4 w-4 text-purple-600" />
+                <span className="text-sm text-purple-600 font-medium">Stop</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Chat Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-8">
@@ -135,28 +334,46 @@ export default function ChatPage() {
       <div className="bg-white border-t border-gray-200 px-4 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-end space-x-4">
+            {/* Voice Input Button */}
+            {isVoiceMode && (
+              <button
+                onClick={toggleListening}
+                disabled={isLoading || isSpeaking}
+                className={`p-3 rounded-xl transition flex-shrink-0 ${
+                  isListening
+                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    : 'bg-purple-600 text-white hover:bg-purple-700'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+              </button>
+            )}
+
             <div className="flex-1 relative">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Type your answer here..."
+                placeholder={isVoiceMode ? "Click the mic or type your answer..." : "Type your answer here..."}
                 className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
                 rows={1}
                 style={{ minHeight: '52px', maxHeight: '200px' }}
+                disabled={isLoading}
               />
             </div>
             <button
               onClick={handleSend}
               disabled={!input.trim() || isLoading}
-              className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 flex-shrink-0"
             >
               <span>Send</span>
               <Send className="h-4 w-4" />
             </button>
           </div>
           <p className="text-xs text-gray-500 mt-2 text-center">
-            This is a demo with simulated responses. The full version uses real AI for market research.
+            {isVoiceMode
+              ? '🎤 Voice mode active. Click the mic to speak or type your response.'
+              : '💬 Powered by Claude AI. Scout remembers your conversation context.'}
           </p>
         </div>
       </div>
