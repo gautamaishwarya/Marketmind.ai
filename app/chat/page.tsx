@@ -2,35 +2,67 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
-import { Sparkles, Send, ArrowLeft, Loader2, Phone, PhoneOff, FileText, Download, CheckCircle2, Target, TrendingUp, Users } from 'lucide-react'
+import { Sparkles, Send, ArrowLeft, Loader2, FileText, Download, CheckCircle2, Target, TrendingUp, Users, Upload } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
 }
 
-interface ResearchData {
+type Stage = 'pre-launch' | 'early-stage' | 'post-revenue' | 'scale-up' | null
+type ResearchPhase = 'stage-selection' | 'collecting' | 'researching' | 'complete'
+
+interface CollectedData {
+  stage: Stage
   product?: string
-  targetMarket?: string
+  targetICP?: string
+  problem?: string
   competitors?: string[]
+  differentiation?: string
+  customerPatterns?: string
+  csvData?: string
 }
 
-type ResearchStage = 'idle' | 'collecting' | 'researching' | 'complete'
+const STAGE_OPTIONS = [
+  {
+    value: 'pre-launch',
+    emoji: '🚀',
+    label: 'Pre-Launch',
+    description: 'No customers yet, still building'
+  },
+  {
+    value: 'early-stage',
+    emoji: '🌱',
+    label: 'Early Stage',
+    description: '1-20 customers/users'
+  },
+  {
+    value: 'post-revenue',
+    emoji: '💰',
+    label: 'Post-Revenue',
+    description: '20-100 customers, generating revenue'
+  },
+  {
+    value: 'scale-up',
+    emoji: '📈',
+    label: 'Scale-Up',
+    description: '100+ customers, looking to optimize'
+  }
+]
 
 const RESEARCH_STEPS = [
-  { id: 'competitors', label: 'Discovering competitors', icon: Target },
-  { id: 'market', label: 'Analyzing market size', icon: TrendingUp },
+  { id: 'scraping', label: 'Scraping competitor websites', icon: Target },
+  { id: 'analysis', label: 'Analyzing market data', icon: TrendingUp },
   { id: 'icp', label: 'Building ICP profiles', icon: Users },
   { id: 'frameworks', label: 'Running business frameworks', icon: CheckCircle2 },
-  { id: 'synthesis', label: 'Generating insights', icon: Sparkles },
+  { id: 'synthesis', label: 'Generating strategic insights', icon: Sparkles },
 ]
 
 export default function ChatPage() {
-  // Chat state
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hey! I'm Scout, your AI market research agent. I'll help you understand your market and find your ideal customers through comprehensive competitive intelligence.\n\nWhat product or service are you building?"
+      content: "Hey! I'm Scout 👋, your AI market research analyst.\n\nI help founders like you discover their real ICP and understand their competitive landscape—whether you're just starting out or scaling fast.\n\nFirst question: **Where are you at with your startup?**"
     }
   ])
   const [input, setInput] = useState('')
@@ -38,24 +70,11 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Research state
-  const [researchStage, setResearchStage] = useState<ResearchStage>('collecting')
-  const [researchData, setResearchData] = useState<ResearchData>({})
+  const [phase, setPhase] = useState<ResearchPhase>('stage-selection')
+  const [collectedData, setCollectedData] = useState<CollectedData>({ stage: null })
+  const [questionIndex, setQuestionIndex] = useState(0)
   const [currentResearchStep, setCurrentResearchStep] = useState(0)
   const [researchResults, setResearchResults] = useState<any>(null)
-
-  // Voice state
-  const [isCallActive, setIsCallActive] = useState(false)
-  const [callStatus, setCallStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle')
-
-  const recognitionRef = useRef<any>(null)
-  const synthRef = useRef<SpeechSynthesis | null>(null)
-  const shouldContinueRef = useRef(false)
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      synthRef.current = window.speechSynthesis
-    }
-  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -65,193 +84,159 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages])
 
-  // Initialize speech recognition
-  const setupRecognition = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return null
-
-    const recognition = new SpeechRecognition()
-    recognition.continuous = false
-    recognition.interimResults = false
-    recognition.lang = 'en-US'
-
-    recognition.onstart = () => setCallStatus('listening')
-
-    recognition.onresult = async (event: any) => {
-      const transcript = event.results[0][0].transcript
-      if (transcript && shouldContinueRef.current) {
-        await handleVoiceMessage(transcript)
-      }
-    }
-
-    recognition.onerror = (event: any) => {
-      console.error('Speech error:', event.error)
-      if (event.error === 'not-allowed') {
-        endCall()
-        alert('Microphone access denied. Please allow microphone access.')
-      } else if (event.error === 'no-speech') {
-        if (shouldContinueRef.current) {
-          setTimeout(() => startListening(), 500)
-        }
-      }
-    }
-
-    recognition.onend = () => {
-      if (callStatus === 'listening') {
-        setCallStatus('idle')
-      }
-    }
-
-    return recognition
-  }
-
-  const startListening = () => {
-    if (!recognitionRef.current || !shouldContinueRef.current) return
-
-    try {
-      setCallStatus('listening')
-      recognitionRef.current.start()
-    } catch (error: any) {
-      if (error.name === 'InvalidStateError') {
-        // Already listening, ignore
-      } else {
-        console.error('Start error:', error)
-      }
+  // Get questions based on stage
+  const getQuestionsForStage = (stage: Stage): string[] => {
+    switch (stage) {
+      case 'pre-launch':
+        return [
+          "Got it! What are you building? (Give me a quick overview)",
+          "Who do you think your ideal customer is? (Role, industry, company size—best guess is fine)",
+          "What problem are you solving, and why will people pay for it?",
+          "Who are your 3-5 main competitors? (Just names or websites)",
+          "What makes you different from them?"
+        ]
+      case 'early-stage':
+        return [
+          "Awesome! What's your product?",
+          "Tell me about your first 5-20 customers/users:\n- What roles do they have?\n- What companies/industries?\n- Any patterns you're seeing?",
+          "Who's converting vs. who's ghosting you? Any patterns?",
+          "Who are your 3-5 main competitors?",
+          "What's working in your GTM so far? What's not?"
+        ]
+      case 'post-revenue':
+        return [
+          "Nice! What does your product do?",
+          "You have 20-100 customers—do you have data you can share?\n\nOption A: Upload a CSV with customer data\nOption B: I'll describe the patterns I'm seeing",
+          "What segments are you seeing? Which convert best? Which have highest LTV? Which churn fastest?",
+          "Who are your 3-5 main competitors?",
+          "What's your biggest uncertainty right now? (ICP, pricing, channels, positioning?)"
+        ]
+      case 'scale-up':
+        return [
+          "Impressive! Tell me about your product.",
+          "With 100+ customers, you likely have segments. What are you seeing?\n- Which segments are most valuable?\n- Which scale best?\n- Which are you unsure about?",
+          "Upload customer data (CSV) or describe your top 3 segments",
+          "Main competitors? (Up to 5)",
+          "What's your growth goal? (Expand current ICP, find new segments, optimize, or prepare for enterprise?)"
+        ]
+      default:
+        return []
     }
   }
 
-  const speak = async (text: string): Promise<void> => {
-    return new Promise((resolve) => {
-      if (!synthRef.current) {
-        resolve()
-        return
-      }
+  // Handle stage selection
+  const handleStageSelection = (stage: Stage) => {
+    setCollectedData({ stage })
+    setPhase('collecting')
+    setQuestionIndex(0)
 
-      synthRef.current.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
+    const stageLabel = STAGE_OPTIONS.find(opt => opt.value === stage)?.label || stage
 
-      utterance.onstart = () => setCallStatus('speaking')
-      utterance.onend = () => {
-        setCallStatus('idle')
-        resolve()
-      }
-      utterance.onerror = () => {
-        setCallStatus('idle')
-        resolve()
-      }
+    // Add user message
+    const userMsg: Message = {
+      role: 'user',
+      content: `${STAGE_OPTIONS.find(opt => opt.value === stage)?.emoji} ${stageLabel}`
+    }
 
-      synthRef.current.speak(utterance)
-    })
+    // Add Scout's next question
+    const questions = getQuestionsForStage(stage)
+    const scoutMsg: Message = {
+      role: 'assistant',
+      content: questions[0]
+    }
+
+    setMessages([...messages, userMsg, scoutMsg])
   }
 
-  const handleVoiceMessage = async (text: string) => {
-    if (!text.trim()) return
+  // Handle file upload
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
 
-    setCallStatus('thinking')
-    await handleSend(text)
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const csvData = event.target?.result as string
+      setCollectedData(prev => ({ ...prev, csvData }))
 
-    if (shouldContinueRef.current) {
-      setTimeout(() => startListening(), 500)
+      const userMsg: Message = {
+        role: 'user',
+        content: `✅ Uploaded CSV file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`
+      }
+      setMessages(prev => [...prev, userMsg])
+
+      // Move to next question
+      proceedToNextQuestion()
     }
+
+    reader.readAsText(file)
   }
 
-  const startCall = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => stream.getTracks().forEach(track => track.stop()))
+  const proceedToNextQuestion = async () => {
+    const questions = getQuestionsForStage(collectedData.stage!)
+    const nextIndex = questionIndex + 1
 
-      recognitionRef.current = setupRecognition()
-      if (!recognitionRef.current) {
-        alert('Voice not supported in your browser. Please use Chrome, Safari, or Edge.')
-        return
+    if (nextIndex < questions.length) {
+      setQuestionIndex(nextIndex)
+
+      const scoutMsg: Message = {
+        role: 'assistant',
+        content: questions[nextIndex]
       }
 
-      setIsCallActive(true)
-      shouldContinueRef.current = true
-      setTimeout(() => startListening(), 500)
-    } catch (error) {
-      alert('Please allow microphone access to use voice chat.')
+      setMessages(prev => [...prev, scoutMsg])
+    } else {
+      // All questions answered, trigger research
+      await triggerResearch()
     }
-  }
-
-  const endCall = () => {
-    shouldContinueRef.current = false
-    setIsCallActive(false)
-    setCallStatus('idle')
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort() } catch (e) {}
-      recognitionRef.current = null
-    }
-    if (synthRef.current) {
-      synthRef.current.cancel()
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      shouldContinueRef.current = false
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort() } catch (e) {}
-      }
-      if (synthRef.current) synthRef.current.cancel()
-    }
-  }, [])
-
-  // Research triggering logic
-  const shouldTriggerResearch = (userInput: string, conversationHistory: Message[]): boolean => {
-    // Trigger research if user has mentioned their product
-    const hasProduct = researchData.product !== undefined
-    const mentionsMarket = userInput.toLowerCase().includes('team') ||
-                          userInput.toLowerCase().includes('market') ||
-                          conversationHistory.length >= 3
-
-    return hasProduct && mentionsMarket && researchStage === 'collecting'
-  }
-
-  const extractResearchData = (userInput: string): Partial<ResearchData> => {
-    const data: Partial<ResearchData> = {}
-
-    // Simple extraction logic - in production, use Claude to extract
-    if (!researchData.product && messages.length === 1) {
-      data.product = userInput
-    }
-
-    if (userInput.toLowerCase().includes('team') && !researchData.targetMarket) {
-      // Extract target market
-      const marketMatch = userInput.match(/for\s+(\w+\s+\w+)/i)
-      if (marketMatch) {
-        data.targetMarket = marketMatch[1]
-      }
-    }
-
-    return data
   }
 
   const triggerResearch = async () => {
-    setResearchStage('researching')
+    setPhase('researching')
 
-    // Add message about starting research
     const researchMessage: Message = {
       role: 'assistant',
-      content: `Perfect! I have enough information to run comprehensive research. Let me analyze your market:\n\n📊 Running competitive intelligence...\n🎯 Building ICP profiles...\n💡 Analyzing frameworks...\n\nThis will take about 2-3 minutes. I'll show you the progress!`
+      content: `Perfect! I have everything I need. Let me analyze your market and competitors.\n\nI'll:\n- Scrape your competitors' websites for positioning, pricing, and target customers\n- Analyze market data and identify ICP patterns\n- Run SWOT analysis and Porter's Five Forces\n- Generate strategic recommendations\n\nThis takes 2-3 minutes. Watch the progress below! 👇`
     }
     setMessages(prev => [...prev, researchMessage])
 
     // Simulate research progress
     for (let i = 0; i < RESEARCH_STEPS.length; i++) {
       setCurrentResearchStep(i)
-      await new Promise(resolve => setTimeout(resolve, 3000))
+      await new Promise(resolve => setTimeout(resolve, i === 0 ? 5000 : 3000))
     }
 
     // Call research API
     try {
+      // First, analyze CSV if provided (post-revenue or scale-up)
+      let csvAnalysis = null
+      if (collectedData.csvData && (collectedData.stage === 'post-revenue' || collectedData.stage === 'scale-up')) {
+        const csvResponse = await fetch('/api/analyze-csv', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvData: collectedData.csvData })
+        })
+
+        if (csvResponse.ok) {
+          const csvResult = await csvResponse.json()
+          csvAnalysis = csvResult.analysis
+        }
+      }
+
+      // Call main research API
       const response = await fetch('/api/research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          product: researchData.product,
-          targetMarket: researchData.targetMarket || 'general market',
+          product: collectedData.product,
+          stage: collectedData.stage,
+          targetMarket: collectedData.targetICP,
+          competitors: collectedData.competitors,
+          additionalContext: {
+            problem: collectedData.problem,
+            differentiation: collectedData.differentiation,
+            customerPatterns: collectedData.customerPatterns,
+          },
+          csvAnalysis,
         })
       })
 
@@ -259,142 +244,170 @@ export default function ChatPage() {
 
       if (data.success) {
         setResearchResults(data.results)
-        setResearchStage('complete')
+        setPhase('complete')
 
         const completionMessage: Message = {
           role: 'assistant',
-          content: `🎉 Research complete! I've analyzed your market comprehensively.\n\n**Here's what I found:**\n\n📊 **Market Intelligence**\n- Identified top 5 competitors\n- Analyzed pricing strategies\n- Mapped market positioning\n\n🎯 **ICP Analysis**\n- Created 2 detailed customer profiles\n- Found key pain points from real data\n- Identified buying triggers\n\n💡 **Strategic Insights**\n- SWOT analysis for each competitor\n- Porter's Five Forces framework\n- Positioning recommendations\n\nClick "Download Report" to get your full 20-page GTM research report!`
+          content: `🎉 **Research Complete!**\n\nI've analyzed your market comprehensively. Here's what I found:\n\n📊 **Market Intelligence**\n- Identified ${data.results.competitors?.length || 'top'} competitors\n- Analyzed pricing strategies and positioning\n- Mapped competitive landscape\n\n🎯 **ICP Analysis**\n- Created ${data.results.icpProfiles?.length || 3} detailed customer profiles\n- Identified key pain points from real market data\n- Pinpointed buying triggers and channels\n\n💡 **Strategic Insights**\n- SWOT analysis for each competitor\n- Porter's Five Forces framework\n- Positioning and pricing recommendations\n\nClick "Download Report" below to get your full GTM research report! 📄`
         }
         setMessages(prev => [...prev, completionMessage])
       }
     } catch (error) {
       console.error('Research failed:', error)
-      setResearchStage('collecting')
+      setPhase('collecting')
+
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: "⚠️ Oops! Something went wrong with the research. Let's try again. Can you provide the competitor URLs one more time?"
+      }
+      setMessages(prev => [...prev, errorMsg])
     }
   }
 
-  // Handle text messages
-  const handleSend = async (text?: string) => {
-    const messageText = text || input
-    if (!messageText.trim() || isLoading) return
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return
 
-    const userMsg: Message = { role: 'user', content: messageText }
-    const updated = [...messages, userMsg]
-    setMessages(updated)
-    if (!text) setInput('')
-    setIsLoading(true)
+    const userMsg: Message = { role: 'user', content: input }
+    setMessages(prev => [...prev, userMsg])
+    setInput('')
 
-    // Extract research data
-    const extracted = extractResearchData(messageText)
-    setResearchData(prev => ({ ...prev, ...extracted }))
+    // Store the collected data based on question index
+    const questions = getQuestionsForStage(collectedData.stage!)
+    const currentQuestion = questions[questionIndex]
 
-    // Check if we should trigger research
-    if (shouldTriggerResearch(messageText, updated)) {
-      setIsLoading(false)
-      await triggerResearch()
-      return
+    if (questionIndex === 0) {
+      setCollectedData(prev => ({ ...prev, product: input }))
+    } else if (currentQuestion.toLowerCase().includes('ideal customer') || currentQuestion.toLowerCase().includes('who do you think')) {
+      setCollectedData(prev => ({ ...prev, targetICP: input }))
+    } else if (currentQuestion.toLowerCase().includes('problem')) {
+      setCollectedData(prev => ({ ...prev, problem: input }))
+    } else if (currentQuestion.toLowerCase().includes('competitors')) {
+      // Parse competitors from input
+      const competitors = input.split(/[,\n]/).map(c => {
+        let url = c.trim()
+        if (!url.startsWith('http')) {
+          url = 'https://' + url.replace(/^(www\.)?/, 'www.')
+        }
+        return url
+      }).filter(c => c.length > 0)
+      setCollectedData(prev => ({ ...prev, competitors }))
+    } else if (currentQuestion.toLowerCase().includes('different')) {
+      setCollectedData(prev => ({ ...prev, differentiation: input }))
+    } else if (currentQuestion.toLowerCase().includes('customers') || currentQuestion.toLowerCase().includes('patterns')) {
+      setCollectedData(prev => ({ ...prev, customerPatterns: input }))
     }
 
+    // If in collecting phase, ask next question or trigger research
+    if (phase === 'collecting') {
+      await proceedToNextQuestion()
+    } else {
+      // Regular chat mode (after research complete)
+      setIsLoading(true)
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content }))
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error('Chat request failed')
+        }
+
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
+        let aiResponse = ''
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            aiResponse += decoder.decode(value, { stream: true })
+            setMessages(prev => {
+              const newMessages = [...prev]
+              const lastMsg = newMessages[newMessages.length - 1]
+              if (lastMsg?.role === 'assistant') {
+                newMessages[newMessages.length - 1] = { role: 'assistant', content: aiResponse }
+              } else {
+                newMessages.push({ role: 'assistant', content: aiResponse })
+              }
+              return newMessages
+            })
+          }
+        }
+
+        setIsLoading(false)
+      } catch (error: any) {
+        console.error('Chat error:', error)
+        const errorMsg: Message = {
+          role: 'assistant',
+          content: "⚠️ Something went wrong. Please try again."
+        }
+        setMessages(prev => [...prev, errorMsg])
+        setIsLoading(false)
+      }
+    }
+  }
+
+  const downloadReport = async () => {
+    if (!researchResults) return
+
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/generate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: updated.map(m => ({ role: m.role, content: m.content }))
-        }),
+          researchData: researchResults,
+          userInfo: {
+            product: collectedData.product,
+            stage: collectedData.stage,
+            targetMarket: collectedData.targetICP,
+          }
+        })
       })
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Request failed')
+        throw new Error('PDF generation failed')
       }
 
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-      let aiResponse = ''
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          aiResponse += decoder.decode(value, { stream: true })
-          setMessages([...updated, { role: 'assistant', content: aiResponse }])
-        }
-      }
-
-      // Auto-speak if in voice mode
-      if (isCallActive && aiResponse) {
-        await speak(aiResponse)
-      }
-
-      setIsLoading(false)
-    } catch (error: any) {
-      console.error('Chat error:', error)
-      const errorMsg = "⚠️ Something went wrong. Please try again."
-      setMessages([...updated, { role: 'assistant', content: errorMsg }])
-      setIsLoading(false)
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `MarketMind-Report-${Date.now()}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error) {
+      console.error('Download error:', error)
+      alert('Failed to download report. Please try again.')
     }
   }
 
-  const downloadReport = () => {
-    // TODO: Generate and download PDF report
-    alert('Report generation coming soon! Your comprehensive GTM research will be available as a professional PDF.')
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col relative">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-4 shadow-sm">
+      <header className="bg-white border-b border-gray-200 px-4 py-4 shadow-soft">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900 transition">
             <ArrowLeft className="h-5 w-5 mr-2" />
             <span className="font-medium">Back to Home</span>
           </Link>
           <div className="flex items-center space-x-2">
-            <Sparkles className="h-6 w-6 text-purple-600" />
+            <Sparkles className="h-6 w-6 text-primary-300" />
             <span className="font-semibold text-gray-900">Chat with Scout</span>
           </div>
           <div className="w-32"></div>
         </div>
       </header>
 
-      {/* Voice Status */}
-      {isCallActive && (
-        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-200 px-4 py-3">
-          <div className="max-w-4xl mx-auto flex items-center justify-center space-x-3">
-            {callStatus === 'listening' && (
-              <>
-                <div className="flex space-x-1">
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse"></div>
-                  <div className="w-1 h-6 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
-                  <div className="w-1 h-4 bg-purple-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
-                </div>
-                <span className="text-purple-700 font-semibold">🎤 I'm listening...</span>
-              </>
-            )}
-            {callStatus === 'thinking' && (
-              <>
-                <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
-                <span className="text-purple-700 font-semibold">Scout is thinking...</span>
-              </>
-            )}
-            {callStatus === 'speaking' && (
-              <>
-                <div className="flex space-x-1">
-                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse"></div>
-                  <div className="w-1 h-6 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }}></div>
-                  <div className="w-1 h-4 bg-green-600 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
-                </div>
-                <span className="text-green-700 font-semibold">🔊 Scout is speaking...</span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Research Progress */}
-      {researchStage === 'researching' && (
-        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-200 px-4 py-6">
+      {phase === 'researching' && (
+        <div className="bg-gradient-to-r from-primary-50 to-secondary-50 border-b border-primary-200 px-4 py-6">
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-4">
               <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Running Comprehensive Research...</h3>
@@ -411,21 +424,21 @@ export default function ChatPage() {
                   <div
                     key={step.id}
                     className={`flex items-center space-x-3 p-3 rounded-lg transition-all ${
-                      isComplete ? 'bg-green-100' :
-                      isCurrent ? 'bg-blue-100 animate-pulse' :
+                      isComplete ? 'bg-secondary-100' :
+                      isCurrent ? 'bg-primary-100 animate-pulse' :
                       'bg-white opacity-50'
                     }`}
                   >
                     {isComplete ? (
-                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                      <CheckCircle2 className="h-5 w-5 text-secondary-700" />
                     ) : isCurrent ? (
-                      <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+                      <Loader2 className="h-5 w-5 text-primary-600 animate-spin" />
                     ) : (
                       <Icon className="h-5 w-5 text-gray-400" />
                     )}
                     <span className={`font-medium ${
-                      isComplete ? 'text-green-700' :
-                      isCurrent ? 'text-blue-700' :
+                      isComplete ? 'text-secondary-900' :
+                      isCurrent ? 'text-primary-700' :
                       'text-gray-500'
                     }`}>
                       {step.label}
@@ -439,7 +452,7 @@ export default function ChatPage() {
             <div className="mt-4">
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-2 rounded-full transition-all duration-500"
+                  className="bg-gradient-to-r from-primary-400 to-secondary-400 h-2 rounded-full transition-all duration-500"
                   style={{ width: `${(currentResearchStep / RESEARCH_STEPS.length) * 100}%` }}
                 />
               </div>
@@ -457,18 +470,18 @@ export default function ChatPage() {
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
             >
               <div
-                className={`max-w-[80%] rounded-2xl px-6 py-4 ${
+                className={`max-w-[80%] rounded-xl px-6 py-4 ${
                   message.role === 'user'
-                    ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
-                    : 'bg-white text-gray-900 shadow-md border border-gray-100'
+                    ? 'bg-primary-300 text-white shadow-card'
+                    : 'bg-white text-gray-900 shadow-soft border border-gray-100'
                 }`}
               >
                 {message.role === 'assistant' && (
                   <div className="flex items-center space-x-2 mb-2">
-                    <div className="w-7 h-7 bg-gradient-to-r from-purple-100 to-blue-100 rounded-full flex items-center justify-center">
-                      <Sparkles className="h-4 w-4 text-purple-600" />
+                    <div className="w-7 h-7 bg-primary-100 rounded-full flex items-center justify-center">
+                      <Sparkles className="h-4 w-4 text-primary-600" />
                     </div>
-                    <span className="text-sm font-bold text-purple-600">Scout</span>
+                    <span className="text-sm font-bold text-primary-600">Scout</span>
                   </div>
                 )}
                 <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
@@ -476,25 +489,61 @@ export default function ChatPage() {
             </div>
           ))}
 
+          {/* Stage Selection Buttons */}
+          {phase === 'stage-selection' && messages.length === 1 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-fade-in">
+              {STAGE_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  onClick={() => handleStageSelection(option.value as Stage)}
+                  className="p-6 bg-white hover:bg-primary-50 border-2 border-gray-200 hover:border-primary-300 rounded-xl transition-all text-left group shadow-soft hover:shadow-card"
+                >
+                  <div className="text-4xl mb-3">{option.emoji}</div>
+                  <div className="font-bold text-gray-900 mb-1 group-hover:text-primary-600 transition">
+                    {option.label}
+                  </div>
+                  <div className="text-sm text-gray-600">{option.description}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* CSV Upload Option */}
+          {phase === 'collecting' && questionIndex === 1 &&
+           (collectedData.stage === 'post-revenue' || collectedData.stage === 'scale-up') && (
+            <div className="flex justify-center animate-fade-in">
+              <label className="flex items-center space-x-3 px-6 py-3 bg-secondary-100 hover:bg-secondary-200 border-2 border-secondary-300 rounded-lg cursor-pointer transition-all group">
+                <Upload className="h-5 w-5 text-secondary-700" />
+                <span className="font-semibold text-secondary-900">Upload CSV File</span>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          )}
+
           {/* Download Report Button */}
-          {researchStage === 'complete' && (
+          {phase === 'complete' && (
             <div className="flex justify-center animate-fade-in">
               <button
                 onClick={downloadReport}
-                className="flex items-center space-x-3 px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+                className="flex items-center space-x-3 px-8 py-4 bg-gradient-to-r from-secondary-300 to-secondary-400 hover:from-secondary-400 hover:to-secondary-500 text-gray-900 rounded-xl transition-all shadow-card hover:shadow-lift transform hover:scale-105 font-bold"
               >
                 <FileText className="h-6 w-6" />
-                <span className="font-bold text-lg">Download Full Report</span>
+                <span className="text-lg">Download Full Report</span>
                 <Download className="h-5 w-5" />
               </button>
             </div>
           )}
 
-          {isLoading && !isCallActive && researchStage !== 'researching' && (
+          {isLoading && phase !== 'researching' && (
             <div className="flex justify-start animate-fade-in">
-              <div className="bg-white rounded-2xl px-6 py-4 shadow-md border border-gray-100">
+              <div className="bg-white rounded-xl px-6 py-4 shadow-soft border border-gray-100">
                 <div className="flex items-center space-x-3">
-                  <Loader2 className="h-5 w-5 text-purple-600 animate-spin" />
+                  <Loader2 className="h-5 w-5 text-primary-600 animate-spin" />
                   <span className="text-gray-600 font-medium">Scout is thinking...</span>
                 </div>
               </div>
@@ -506,8 +555,8 @@ export default function ChatPage() {
       </div>
 
       {/* Input Area */}
-      {!isCallActive && researchStage !== 'researching' && (
-        <div className="bg-white border-t border-gray-200 px-4 py-5 shadow-lg">
+      {phase !== 'researching' && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-5 shadow-lift">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-end space-x-4">
               <div className="flex-1">
@@ -521,16 +570,16 @@ export default function ChatPage() {
                     }
                   }}
                   placeholder="Type your answer here..."
-                  className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none text-gray-900 placeholder-gray-400"
+                  className="w-full px-5 py-4 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-300 focus:border-transparent resize-none text-gray-900 placeholder-gray-400"
                   rows={1}
                   style={{ minHeight: '56px', maxHeight: '200px' }}
-                  disabled={isLoading}
+                  disabled={isLoading || phase === 'stage-selection'}
                 />
               </div>
               <button
-                onClick={() => handleSend()}
-                disabled={!input.trim() || isLoading}
-                className="px-7 py-4 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:from-purple-700 hover:to-purple-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-semibold"
+                onClick={handleSend}
+                disabled={!input.trim() || isLoading || phase === 'stage-selection'}
+                className="px-7 py-4 bg-primary-300 hover:bg-primary-400 text-white rounded-xl transition-all shadow-soft hover:shadow-card disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-semibold"
               >
                 <span>Send</span>
                 <Send className="h-5 w-5" />
@@ -540,34 +589,6 @@ export default function ChatPage() {
               💬 Powered by Claude AI • Comprehensive GTM research in minutes
             </p>
           </div>
-        </div>
-      )}
-
-      {/* Floating Phone Button */}
-      <div className="fixed bottom-8 right-8 z-50">
-        {!isCallActive ? (
-          <button
-            onClick={startCall}
-            className="group w-20 h-20 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-full shadow-2xl hover:shadow-purple-500/50 transition-all duration-300 flex items-center justify-center transform hover:scale-110"
-            title="Start voice call with Scout"
-          >
-            <Phone className="h-9 w-9 group-hover:scale-110 transition-transform" />
-          </button>
-        ) : (
-          <button
-            onClick={endCall}
-            className="group w-20 h-20 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-full shadow-2xl hover:shadow-red-500/50 transition-all duration-300 flex items-center justify-center animate-pulse transform hover:scale-110"
-            title="End voice call"
-          >
-            <PhoneOff className="h-9 w-9 group-hover:scale-110 transition-transform" />
-          </button>
-        )}
-      </div>
-
-      {/* Call Active Badge */}
-      {isCallActive && (
-        <div className="fixed bottom-32 right-8 z-40 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-5 py-2 rounded-full shadow-lg text-sm font-bold animate-fade-in">
-          📞 Call Active
         </div>
       )}
     </div>

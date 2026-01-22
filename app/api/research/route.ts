@@ -1,100 +1,242 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
-import type { ResearchRequest, ResearchResults } from '@/lib/types/research'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 })
 
-const RESEARCH_SYSTEM_PROMPT = `You are a professional market research analyst and competitive intelligence expert. Your job is to conduct comprehensive GTM (Go-To-Market) research.
+interface ResearchRequest {
+  product: string
+  stage: 'pre-launch' | 'early-stage' | 'post-revenue' | 'scale-up'
+  targetMarket?: string
+  competitors?: string[]
+  additionalContext?: any
+  csvAnalysis?: any
+}
 
-When given a product and target market, you will:
-
-1. COMPETITOR ANALYSIS
-   - Identify top 5-10 competitors in the space
-   - For each competitor, provide:
-     * Company overview and positioning
-     * Pricing strategy (specific tiers and prices if available)
-     * Key features and differentiators
-     * Strengths and weaknesses
-     * Customer reviews summary (what people love/hate)
-
-2. ICP (IDEAL CUSTOMER PROFILE) RESEARCH
-   - Create 2-3 detailed ICPs based on who actually buys these products
-   - For each ICP include:
-     * Firmographics (company size, revenue, industry)
-     * Decision maker profile (title, experience, team size)
-     * Specific pain points with real examples
-     * Current solutions they use
-     * Buying triggers (what makes them search for solutions)
-     * Buying process (timeline, stakeholders, objections)
-     * Where to find them (communities, search terms)
-
-3. MARKET ANALYSIS
-   - Market size (TAM/SAM/SOM estimates)
-   - Growth trends and forecasts
-   - Key market dynamics
-
-4. BUSINESS FRAMEWORKS
-   - SWOT analysis for top 3 competitors
-   - Porter's Five Forces analysis
-   - Strategic recommendations
-
-5. GTM STRATEGY
-   - Positioning recommendation
-   - Pricing strategy
-   - Priority channels
-   - 90-day action plan
-
-CRITICAL REQUIREMENTS:
-- Base analysis on real competitor data (actual pricing, features, reviews)
-- Use specific examples and quotes when possible
-- Cite data sources
-- Be quantitative (percentages, numbers) not vague
-- Focus on ACTIONABLE insights
-- Never make up data - if you don't know, say so
-
-Format your response as a structured JSON object following the ResearchResults type.`
-
+/**
+ * Comprehensive research orchestration API
+ * Coordinates scraping, analysis, and insight generation based on startup stage
+ */
 export async function POST(req: NextRequest) {
   try {
     const body: ResearchRequest = await req.json()
-    const { product, targetMarket, additionalContext } = body
+    const { product, stage, targetMarket, competitors, additionalContext, csvAnalysis } = body
 
-    if (!product || !targetMarket) {
+    if (!product || !stage) {
       return NextResponse.json(
-        { error: 'Product and target market are required' },
+        { error: 'Product and stage are required' },
         { status: 400 }
       )
     }
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return NextResponse.json(
-        { error: 'API key not configured' },
-        { status: 500 }
-      )
+    console.log(`Starting research for: ${product} (${stage})`)
+
+    // Step 1: Scrape competitors (if provided)
+    let competitorData: any[] = []
+    if (competitors && competitors.length > 0) {
+      console.log(`Scraping ${competitors.length} competitors...`)
+
+      const scrapePromises = competitors.slice(0, 5).map(async (url) => {
+        try {
+          const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/scrape-competitor`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+          })
+
+          if (!response.ok) {
+            console.error(`Failed to scrape ${url}`)
+            return null
+          }
+
+          const data = await response.json()
+          return data.success ? data.data : null
+        } catch (error) {
+          console.error(`Error scraping ${url}:`, error)
+          return null
+        }
+      })
+
+      const results = await Promise.all(scrapePromises)
+      competitorData = results.filter(r => r !== null)
+      console.log(`Successfully scraped ${competitorData.length} competitors`)
     }
 
-    // Call Claude to do comprehensive research
-    const researchPrompt = `Conduct comprehensive GTM research for:
+    // Step 2: Generate comprehensive research based on stage
+    let researchPrompt = ''
+
+    switch (stage) {
+      case 'pre-launch':
+        researchPrompt = `Conduct comprehensive ICP discovery research for a PRE-LAUNCH startup.
 
 Product: ${product}
-Target Market: ${targetMarket}
-${additionalContext ? `Additional Context: ${additionalContext}` : ''}
+Target Market: ${targetMarket || 'Not specified'}
+${competitorData.length > 0 ? `\nCompetitor Data:\n${JSON.stringify(competitorData, null, 2)}` : ''}
 
-Provide a complete market research analysis including:
-1. Top competitors with detailed profiles
-2. 2-3 ICP personas with real buying behavior
-3. Market sizing and trends
-4. SWOT and Porter's Five Forces analysis
-5. Strategic recommendations
+As a market research analyst, provide:
 
-Return results as a structured analysis.`
+1. **Competitor Analysis** (based on scraped data if available):
+   - For each competitor: positioning, strengths, weaknesses, pricing strategy
+   - Market gaps and opportunities
+   - Competitive differentiation recommendations
+
+2. **ICP Hypothesis** (3 segments, prioritized):
+   Based on competitor customers and market signals, identify:
+   - Segment name and description
+   - Firmographics (company size, industry, revenue)
+   - Decision maker profile (role, seniority, team size)
+   - Pain points (specific, evidence-based)
+   - Buying triggers
+   - Where to find them (communities, channels, search terms)
+   - Why this segment will buy (rationale)
+   - Evidence/reasoning for recommendation
+
+3. **Market Analysis**:
+   - TAM/SAM/SOM estimates (with sources/methodology)
+   - Market growth trends
+   - Key dynamics affecting the market
+
+4. **Strategic Frameworks**:
+   - SWOT analysis for top 3 competitors
+   - Porter's Five Forces analysis
+   - Positioning recommendation
+
+5. **GTM Strategy**:
+   - Recommended positioning statement
+   - Pricing strategy (based on competitor analysis)
+   - Top 3 GTM channels with rationale
+   - First 90-day action plan
+
+Return structured JSON following this format:
+{
+  "competitors": [/* competitor profiles */],
+  "icpProfiles": [/* 3 ICP segments */],
+  "marketData": {/* TAM/SAM/SOM */},
+  "swotAnalyses": [/* SWOT for top 3 */],
+  "portersFiveForces": {/* analysis */},
+  "positioning": {/* recommendation */},
+  "pricing": {/* strategy */},
+  "gtmChannels": [/* top 3 */],
+  "actionPlan": [/* 90-day plan */]
+}`
+        break
+
+      case 'early-stage':
+        researchPrompt = `Conduct ICP validation research for an EARLY-STAGE startup (1-20 customers).
+
+Product: ${product}
+Target Market: ${targetMarket || 'Not specified'}
+Early Customer Patterns: ${additionalContext?.customerPatterns || 'Not provided'}
+${competitorData.length > 0 ? `\nCompetitor Data:\n${JSON.stringify(competitorData, null, 2)}` : ''}
+
+As a market research analyst, provide:
+
+1. **Customer Pattern Analysis**:
+   - Validate patterns from early customers
+   - Identify converging vs non-converging profiles
+   - Recommend which segments to double down on
+
+2. **Validated ICP Segments** (3 segments):
+   - Primary: Based on best-converting customers
+   - Secondary: Adjacent opportunity
+   - Tertiary: Future potential
+   For each: firmographics, decision maker, pain points, conversion insights
+
+3. **Competitor Positioning**:
+   - How competitors position against these ICPs
+   - Gaps in their offering
+   - Your differentiation opportunity
+
+4. **Optimization Recommendations**:
+   - Which customer type to focus on (data-backed)
+   - Which to avoid (with reasoning)
+   - Channel recommendations
+   - Next 20 customers: specific targeting criteria
+
+Return structured JSON with the same format as pre-launch.`
+        break
+
+      case 'post-revenue':
+        researchPrompt = `Conduct quantitative ICP analysis for a POST-REVENUE startup (20-100 customers).
+
+Product: ${product}
+Target Market: ${targetMarket || 'Not specified'}
+${csvAnalysis ? `\nCustomer Data Analysis:\n${JSON.stringify(csvAnalysis, null, 2)}` : ''}
+${competitorData.length > 0 ? `\nCompetitor Data:\n${JSON.stringify(competitorData, null, 2)}` : ''}
+
+As a market research analyst, provide:
+
+1. **Data-Driven ICP Analysis**:
+   ${csvAnalysis ? '- Use the CSV analysis to identify winning segments' : '- Analyze described customer patterns'}
+   - Segment by conversion rate, LTV, churn
+   - Identify highest-value customers
+   - Pinpoint segments to avoid
+
+2. **Competitive Intelligence**:
+   - Deep SWOT for each competitor
+   - Your positioning vs competitors for each segment
+   - Pricing optimization based on segment value
+
+3. **Scaling Strategy**:
+   - Which ICP to scale (with ROI projections)
+   - Channel allocation by segment
+   - Expansion opportunities
+   - Next 100 customers: precise targeting
+
+4. **Optimization Roadmap**:
+   - Quick wins (30 days)
+   - Medium-term improvements (90 days)
+   - Long-term strategy (12 months)
+
+Return structured JSON with quantitative metrics included.`
+        break
+
+      case 'scale-up':
+        researchPrompt = `Conduct advanced segmentation research for a SCALE-UP (100+ customers).
+
+Product: ${product}
+Target Market: ${targetMarket || 'Not specified'}
+${csvAnalysis ? `\nCustomer Segmentation Data:\n${JSON.stringify(csvAnalysis, null, 2)}` : ''}
+${competitorData.length > 0 ? `\nCompetitor Data:\n${JSON.stringify(competitorData, null, 2)}` : ''}
+
+As a market research analyst, provide:
+
+1. **Advanced Segmentation**:
+   - Cohort analysis of customer segments
+   - LTV/CAC by segment
+   - Identify expansion opportunities within existing segments
+   - New adjacent ICPs for market expansion
+
+2. **Competitive Landscape**:
+   - Market share estimates
+   - Competitive positioning by segment
+   - Threats and opportunities
+   - Moat-building recommendations
+
+3. **Growth Strategy**:
+   - Current segment optimization
+   - New segment expansion plan
+   - Enterprise readiness assessment
+   - International expansion considerations (if applicable)
+
+4. **Strategic Roadmap**:
+   - Immediate optimizations (30 days)
+   - Growth initiatives (6 months)
+   - Strategic positioning (12-24 months)
+
+Return comprehensive JSON with segment metrics, market sizing, and strategic recommendations.`
+        break
+    }
+
+    // Call Claude for comprehensive analysis
+    console.log('Generating comprehensive research with Claude...')
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      system: RESEARCH_SYSTEM_PROMPT,
+      max_tokens: 8000,
+      temperature: 0.7,
+      system: `You are an expert market research analyst specializing in ICP discovery and competitive intelligence. Provide data-backed, actionable insights. Always structure your response as valid JSON.`,
       messages: [{
         role: 'user',
         content: researchPrompt
@@ -105,24 +247,55 @@ Return results as a structured analysis.`
       ? message.content[0].text
       : ''
 
-    // Parse and structure the research results
-    const results: Partial<ResearchResults> = {
-      requestId: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      dataSourcesCited: ['Claude Analysis', 'Market Intelligence'],
-      researchDepth: {
-        competitorsAnalyzed: 5,
-        reviewsAnalyzed: 0,
-        dataPointsCollected: 50
+    // Parse JSON response
+    let researchResults
+    try {
+      const jsonText = responseText
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim()
+
+      researchResults = JSON.parse(jsonText)
+    } catch (parseError) {
+      console.error('Failed to parse Claude response:', responseText.substring(0, 500))
+
+      // Return structured response even if JSON parse fails
+      researchResults = {
+        competitors: competitorData.map((c: any) => ({
+          name: c.url,
+          description: c.description,
+          pricing: c.pricing,
+          strengths: [],
+          weaknesses: [],
+        })),
+        icpProfiles: [],
+        analysis: responseText, // Include raw response
       }
     }
 
+    // Add metadata
+    const finalResults = {
+      requestId: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      stage,
+      ...researchResults,
+      dataSourcesCited: [
+        'Competitor website analysis',
+        'Claude AI market research',
+        ...(csvAnalysis ? ['Customer data analysis'] : []),
+      ],
+      researchDepth: {
+        competitorsAnalyzed: competitorData.length,
+        reviewsAnalyzed: 0,
+        dataPointsCollected: competitorData.length * 10,
+      }
+    }
+
+    console.log('Research completed successfully')
+
     return NextResponse.json({
       success: true,
-      results: {
-        ...results,
-        analysis: responseText
-      }
+      results: finalResults
     })
 
   } catch (error: any) {
@@ -130,6 +303,7 @@ Return results as a structured analysis.`
 
     return NextResponse.json(
       {
+        success: false,
         error: 'Research failed',
         message: error.message
       },
