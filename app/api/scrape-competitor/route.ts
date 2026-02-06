@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
-
 interface ScrapeResult {
   url: string
   success: boolean
@@ -43,11 +39,33 @@ export async function POST(req: NextRequest) {
           error: 'API configuration error',
           message: 'ANTHROPIC_API_KEY environment variable is not set. Please add it to your .env.local file.'
         },
-        { status: 500 }
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        }
       )
     }
 
-    const { url } = await req.json()
+    // Parse request body with error handling
+    let body
+    try {
+      body = await req.json()
+    } catch (parseError: any) {
+      console.error('Failed to parse request body:', parseError)
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid request',
+          message: 'Failed to parse request body. Please ensure you\'re sending valid JSON.'
+        },
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      )
+    }
+
+    const { url } = body
 
     if (!url) {
       return NextResponse.json(
@@ -56,7 +74,10 @@ export async function POST(req: NextRequest) {
           error: 'URL is required',
           message: 'Please provide a URL to scrape'
         },
-        { status: 400 }
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
       )
     }
 
@@ -71,7 +92,10 @@ export async function POST(req: NextRequest) {
           error: 'Invalid URL format',
           message: 'Please provide a valid URL (e.g., https://example.com)'
         },
-        { status: 400 }
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
       )
     }
 
@@ -108,12 +132,22 @@ export async function POST(req: NextRequest) {
     } catch (error: any) {
       console.error(`Failed to fetch ${competitorUrl.href}:`, error.message)
 
-      return NextResponse.json({
-        url: competitorUrl.href,
-        success: false,
-        error: `Failed to fetch website: ${error.message}`,
-      } as ScrapeResult)
+      return NextResponse.json(
+        {
+          url: competitorUrl.href,
+          success: false,
+          error: `Failed to fetch website: ${error.message}`,
+        } as ScrapeResult,
+        {
+          headers: { 'Content-Type': 'application/json' }
+        }
+      )
     }
+
+    // Initialize Anthropic client with validated API key
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    })
 
     // Use Claude to extract structured data from HTML
     try {
@@ -182,20 +216,30 @@ IMPORTANT:
         throw new Error('Failed to parse extracted data')
       }
 
-      return NextResponse.json({
-        url: competitorUrl.href,
-        success: true,
-        data: extractedData,
-      } as ScrapeResult)
+      return NextResponse.json(
+        {
+          url: competitorUrl.href,
+          success: true,
+          data: extractedData,
+        } as ScrapeResult,
+        {
+          headers: { 'Content-Type': 'application/json' }
+        }
+      )
 
     } catch (error: any) {
       console.error(`Failed to extract data from ${competitorUrl.href}:`, error.message)
 
-      return NextResponse.json({
-        url: competitorUrl.href,
-        success: false,
-        error: `Failed to extract data: ${error.message}`,
-      } as ScrapeResult)
+      return NextResponse.json(
+        {
+          url: competitorUrl.href,
+          success: false,
+          error: `Failed to extract data: ${error.message}`,
+        } as ScrapeResult,
+        {
+          headers: { 'Content-Type': 'application/json' }
+        }
+      )
     }
 
   } catch (error: any) {

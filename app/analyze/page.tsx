@@ -73,20 +73,48 @@ export default function AnalyzePage() {
         body: JSON.stringify({ url: formattedUrl }),
       })
 
-      // Check if response is JSON
+      // Check if response is JSON BEFORE trying to parse
       const contentType = response.headers.get('content-type')
+
       if (!contentType || !contentType.includes('application/json')) {
-        throw new Error('Server returned an invalid response. Please check your API configuration.')
+        // Server returned HTML or other non-JSON response
+        const textResponse = await response.text()
+        console.error('Non-JSON response:', textResponse.substring(0, 500))
+
+        if (textResponse.includes('<!DOCTYPE') || textResponse.includes('<html')) {
+          throw new Error(
+            '⚠️ Server Error: The API returned an HTML error page instead of JSON. ' +
+            'This usually means:\n\n' +
+            '1. ANTHROPIC_API_KEY is not set in your environment variables\n' +
+            '2. There\'s a server configuration issue\n' +
+            '3. The route failed to load\n\n' +
+            'Please check your .env.local file and restart the server.'
+          )
+        }
+
+        throw new Error('Server returned an invalid response: ' + textResponse.substring(0, 200))
       }
 
-      const data = await response.json()
+      // Now safe to parse JSON
+      let data
+      try {
+        data = await response.json()
+      } catch (parseError: any) {
+        console.error('JSON parse error:', parseError)
+        throw new Error(
+          '⚠️ Failed to parse server response. ' +
+          'The server might be returning an error page. ' +
+          'Please check if ANTHROPIC_API_KEY is set and restart the server.'
+        )
+      }
 
+      // Check response status and data
       if (!response.ok) {
         throw new Error(data.error || data.message || 'Failed to analyze competitor')
       }
 
       if (!data.success) {
-        throw new Error(data.error || 'Analysis failed')
+        throw new Error(data.message || data.error || 'Analysis failed')
       }
 
       setResults(data)
@@ -228,9 +256,9 @@ export default function AnalyzePage() {
           <div className="bg-red-50 border-2 border-red-200 rounded-xl p-6 mb-8">
             <div className="flex items-start gap-3">
               <span className="text-2xl">⚠️</span>
-              <div>
+              <div className="flex-1">
                 <h3 className="text-lg font-bold text-red-900 mb-1">Error</h3>
-                <p className="text-red-700">{error}</p>
+                <p className="text-red-700 whitespace-pre-line">{error}</p>
                 <div className="mt-4 text-sm text-red-600">
                   <p className="font-semibold mb-2">Common issues:</p>
                   <ul className="list-disc list-inside space-y-1">
@@ -239,6 +267,18 @@ export default function AnalyzePage() {
                     <li>Invalid URL format</li>
                     <li>Network connectivity issues</li>
                   </ul>
+                  <div className="mt-4">
+                    <a
+                      href="/api/health"
+                      target="_blank"
+                      className="inline-block bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                    >
+                      🔍 Check API Configuration
+                    </a>
+                    <p className="text-xs text-red-500 mt-2">
+                      Click above to verify your API key is configured correctly
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
