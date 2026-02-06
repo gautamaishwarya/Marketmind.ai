@@ -34,11 +34,28 @@ interface ScrapeResult {
  */
 export async function POST(req: NextRequest) {
   try {
+    // Validate API key first
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.error('ANTHROPIC_API_KEY is not set')
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'API configuration error',
+          message: 'ANTHROPIC_API_KEY environment variable is not set. Please add it to your .env.local file.'
+        },
+        { status: 500 }
+      )
+    }
+
     const { url } = await req.json()
 
     if (!url) {
       return NextResponse.json(
-        { error: 'URL is required' },
+        {
+          success: false,
+          error: 'URL is required',
+          message: 'Please provide a URL to scrape'
+        },
         { status: 400 }
       )
     }
@@ -49,7 +66,11 @@ export async function POST(req: NextRequest) {
       competitorUrl = new URL(url)
     } catch {
       return NextResponse.json(
-        { error: 'Invalid URL format' },
+        {
+          success: false,
+          error: 'Invalid URL format',
+          message: 'Please provide a valid URL (e.g., https://example.com)'
+        },
         { status: 400 }
       )
     }
@@ -179,12 +200,21 @@ IMPORTANT:
 
   } catch (error: any) {
     console.error('Scrape API Error:', error)
+
+    // Ensure we always return JSON, never HTML
     return NextResponse.json(
       {
+        success: false,
         error: 'Internal server error',
-        message: error.message
+        message: error.message || 'An unexpected error occurred while processing your request',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
       },
-      { status: 500 }
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
     )
   }
 }

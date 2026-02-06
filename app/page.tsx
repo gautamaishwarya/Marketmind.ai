@@ -16,17 +16,20 @@ export default function Home() {
             </Link>
 
             <div className="hidden md:flex items-center space-x-8">
+              <Link href="/" className="text-gray-600 hover:text-gray-900 transition">
+                Home
+              </Link>
               <a href="#how-it-works" className="text-gray-600 hover:text-gray-900 transition">
-                How It Works
+                Why MarketMind AI
               </a>
               <a href="#pricing" className="text-gray-600 hover:text-gray-900 transition">
-                Pricing
+                About
               </a>
-              <Link
-                href="/chat"
-                className="bg-primary-300 hover:bg-primary-400 text-white px-6 py-2.5 rounded-button font-semibold transition-all shadow-soft hover:shadow-card"
-              >
-                Start Free Research
+              <Link href="/analyze" className="text-gray-600 hover:text-gray-900 transition">
+                Analyze
+              </Link>
+              <Link href="/chat" className="text-gray-600 hover:text-gray-900 transition">
+                Idea Validator
               </Link>
             </div>
 

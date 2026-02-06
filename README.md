@@ -4,7 +4,12 @@ An AI-powered market research tool that helps founders understand their market t
 
 ## 🚀 Features
 
+- **AI-Powered Competitor Analysis**: Scrape and analyze competitor websites with Claude AI
 - **Conversational AI Agent**: Talk to Scout and get market insights
+- **Competitor Intelligence**: Extract pricing, features, positioning, and testimonials
+- **ICP Discovery**: Identify ideal customer profiles based on data
+- **PDF Report Generation**: Download professional research reports
+- **CSV Analysis**: Upload customer data for segmentation analysis
 - **Landing Page**: Beautiful marketing site with features, pricing, and testimonials
 - **Chat Interface**: Real-time chat with typing indicators
 - **Modern Design**: Built with Tailwind CSS and animated components
@@ -31,14 +36,20 @@ This is a **demo version** with simulated AI responses. The full version would i
 
 ### Option 1: Deploy to Vercel (Recommended - Easiest!)
 
-1. **Push to GitHub**:
+1. **Set up Environment Variables**:
+   - Get your API key from [Anthropic Console](https://console.anthropic.com/)
+   - Copy `.env.example` to `.env.local`
+   - Add your API key: `ANTHROPIC_API_KEY=your_key_here`
+
+2. **Push to GitHub**:
    - Create a new repository on GitHub
    - Upload all these files to the repository
 
-2. **Deploy on Vercel**:
+3. **Deploy on Vercel**:
    - Go to [vercel.com](https://vercel.com)
    - Click "Add New Project"
    - Import your GitHub repository
+   - Add environment variable: `ANTHROPIC_API_KEY`
    - Click "Deploy"
    - Done! Your app will be live in 2 minutes
 
@@ -49,12 +60,26 @@ This is a **demo version** with simulated AI responses. The full version would i
    npm install
    ```
 
-2. **Run Development Server**:
+2. **Set up Environment Variables**:
+   ```bash
+   # Copy the example env file
+   cp .env.example .env.local
+
+   # Edit .env.local and add your API key
+   # ANTHROPIC_API_KEY=your_anthropic_api_key_here
+   ```
+
+3. **Get Your API Key**:
+   - Sign up at [Anthropic Console](https://console.anthropic.com/)
+   - Create an API key
+   - Copy it to your `.env.local` file
+
+4. **Run Development Server**:
    ```bash
    npm run dev
    ```
 
-3. **Open Browser**:
+5. **Open Browser**:
    Navigate to [http://localhost:3000](http://localhost:3000)
 
 ## 📁 Project Structure
@@ -135,19 +160,40 @@ NEXT_PUBLIC_STRIPE_KEY=your_stripe_key
 
 ## 🐛 Troubleshooting
 
+### "Unexpected token '<', "<!DOCTYPE "... is not valid JSON" Error
+
+This error occurs when the API returns HTML instead of JSON. Common causes:
+
+1. **Missing API Key** (Most Common):
+   - Make sure `ANTHROPIC_API_KEY` is set in your `.env.local` file
+   - Restart your dev server after adding the API key
+   - In Vercel, add the environment variable in project settings
+
+2. **Invalid API Key**:
+   - Verify your API key is correct
+   - Check if it has expired
+   - Generate a new key from [Anthropic Console](https://console.anthropic.com/)
+
+3. **Environment Variable Not Loading**:
+   - File must be named `.env.local` (not `.env` in development)
+   - Restart the Next.js dev server
+   - Clear `.next` folder: `rm -rf .next`
+
 ### Build Errors
 
 If you get build errors on Vercel:
 1. Check that all dependencies are in `package.json`
 2. Ensure TypeScript files have no errors
 3. Check the build logs for specific issues
+4. Verify `ANTHROPIC_API_KEY` is set in Vercel environment variables
 
 ### Deployment Issues
 
 If deployment fails:
 1. Make sure `.gitignore` is properly configured
 2. Check that `next.config.js` is correct
-3. Verify all environment variables are set
+3. Verify all environment variables are set in Vercel
+4. Ensure API key has sufficient credits
 
 ## 📄 License
 
